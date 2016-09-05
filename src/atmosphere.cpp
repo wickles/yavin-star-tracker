@@ -10,21 +10,23 @@ the new azimuth and elevation angles, which are then transformed back to (correc
 //RA and DEC are in RADIANs; LONG and LAT are in DEGREES (RA and DEC are computed; lat and long are inputs)
 //LONG is taken to be positive for east, negative for west
 
+// TEST: RA anything, DEC +- 90 deg. --> AZI 0, ELE = LAT
+
 #include "atmosphere.h"
 #include <cmath>
 
 using namespace std;
 
 //more information on http://www.usno.navy.mil/USNO/astronomical-applications/astronomical-information-center/approx-sider-time/?searchterm=GAST
-double getLST(double RA, double LONG, double relJDN) //compute the Hour Angle in Radians
+double getLST(double LONG, double relJDN) //compute the Hour Angle in Radians
 {
 	double GMST, LST;									//Julian Date since J2000 (in days)
 	GMST = fmod(18.697374558 + 24.06570982441908 * relJDN, 24);			//compute the Greenwtch Mean Sidereal Time (in hours)
-	LST = LONG / 15 + GMST;													//compute the mean Local Sidereal Time (in hours)
+	LST = LONG * 12 / M_PI + GMST;													//compute the mean Local Sidereal Time (in hours)
 	if (LST < 0)															//make sure LST in the right range (0-24 hours)
-		LST = LST + 24;
+		LST += 24;
 	if (LST > 24)
-		LST = LST - 24;
+		LST -= 24;
 	return LST * M_PI / 12;													//return LST in ***RADIANS***
 }
 
@@ -60,12 +62,12 @@ double getAzi(double HA, double LAT, double DEC)
 double correctEle(double ELE, double height, double temp)
 {
 	double correction;
-	double tanh = tan(ELE);
+	double th = tan(ELE);
 	double h = height;
 	if (ELE = M_PI/2)
 		return ELE;
 	else if (ELE > 0.0873)
-		correction = ( (58.1/tanh) - (0.07/(tanh*tanh*tanh)) + (0.000086/(tanh*tanh*tanh*tanh*tanh)) ) / 3600.0;
+		correction = ( (58.1/th) - (0.07/(th*th*th)) + (0.000086/(th*th*th*th*th)) ) / 3600.0;
 	else 
 		correction = (1735.0 - 518.2*h + 103.4*h*h - 12.79*h*h*h + 0.711*h*h*h*h) / 3600.0;
 

@@ -228,13 +228,13 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 {
 	if ( Attributes->CameraID == Camera.DeviceID ) // The working camera.
 	{
-		SYSTEMTIME systime;
-		GetLocalTime( &systime );
+		SYSTEMTIME localtime;
+		GetLocalTime( &localtime );
 		/*
 		printf( "Grabbing frame: %04d.%02d.%02d : %02d:%02d:%02d.%03d\n", systime.wYear, systime.wMonth, systime.wDay,
 							systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds );
 							*/
-		Image_LocalTime = systime;
+		Image_LocalTime = localtime;
 
 		//printf( "BytePtr at %08X\n", (unsigned int)BytePtr);
 
@@ -256,8 +256,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 			char buffer[512];
 
 			// get system timestamp (millisecond accuracy)
-			sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.raw", dir_name, systime.wYear, systime.wMonth, systime.wDay,
-							systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds );
+			sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.raw", dir_name, localtime.wYear, localtime.wMonth, localtime.wDay,
+							localtime.wHour, localtime.wMinute, localtime.wSecond, localtime.wMilliseconds );
 
 			FILE* file = fopen(buffer, "wb");
 			if ( file == NULL )
@@ -359,12 +359,17 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 						Image_Coords = Coords;
 
 						// Get Az, El
+						SYSTEMTIME systime;
+						GetSystemTime( &systime );
 						double relJDN = getJulianDate( &systime );
+						double LAT = Settings.Latitude * M_PI / 180;
+						double LONG = Settings.Longitude * M_PI / 180;
+						//printf("Julian: %f\n", relJDN);
 						double LST, HA;
-						LST = getLST( Coords.RA, Settings.Longitude, relJDN );
+						LST = getLST( Coords.RA, LONG, relJDN );
 						HA = getHA1( LST, Coords.RA );
-						Image_Azi = getAzi( HA, Settings.Latitude, Coords.DEC );
-						Image_Ele = getEle( HA, Settings.Latitude, Coords.DEC );
+						Image_Azi = getAzi( HA, LAT, Coords.DEC );
+						Image_Ele = getEle( HA, LAT, Coords.DEC );
 						//Ele_Corr = correctEle( );
 
 						int i, j;
@@ -397,8 +402,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 											  "%.4f,%.4f,%d,"
 											  "%.1f,%d,"
 											  "%f,%f,%f,%f\n",
-										systime.wMonth, systime.wDay, systime.wYear,
-										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
+										localtime.wMonth, localtime.wDay, localtime.wYear,
+										localtime.wHour, localtime.wMinute, localtime.wSecond, localtime.wMilliseconds,
 										Settings.Latitude, Settings.Longitude, Settings.Altitude,
 										Coords.RA*180/M_PI, Coords.DEC*180/M_PI,
 										coords.RA_hr, coords.RA_min, coords.RA_sec,
@@ -419,8 +424,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 											  "ERR,ERR,ERR,"
 											  "%.1f,%d,"
 											  "ERR,ERR,ERR,ERR\n",
-										systime.wMonth, systime.wDay, systime.wYear,
-										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
+										localtime.wMonth, localtime.wDay, localtime.wYear,
+										localtime.wHour, localtime.wMinute, localtime.wSecond, localtime.wMilliseconds,
 										Settings.Latitude, Settings.Longitude, Settings.Altitude,
 										Detector.mean_sky, num_detected );
 							}
@@ -466,6 +471,27 @@ int main(int argc, char* argv[])
 	MSG msg; // Required for camera to interface with windows
 
 	int ret;
+
+	//TEST
+	/*
+		SYSTEMTIME time;
+		GetSystemTime( &time );
+		double relJDN = getJulianDate( &time );
+		double LAT = 0.0;
+		double LONG = 0.0;
+		double RA = 0.0;
+		double DEC = M_PI/2;
+		//printf("Julian: %f\n", relJDN);
+		double LST, HA;
+		LST = getLST( LONG, relJDN );
+		HA = getHA1( LST, RA );
+		Image_Azi = getAzi( HA, LAT, DEC );
+		Image_Ele = getEle( HA, LAT, DEC );
+
+		printf("JDN = %f | (LAT,LONG) = (%f,%f) | (RA,DEC) = (%f,%f) | (LST, HA) = (%f,%f) | (AZI,EL) = (%f, %f)",
+				relJDN, LAT, LONG, RA, DEC, LST, HA, Image_Azi, Image_Ele);
+				*/
+	//TEST
 
 	ImageStars.reserve( 500 );
 
@@ -622,7 +648,7 @@ int main(int argc, char* argv[])
 		BUFCCDUSB_StartFrameGrab( GRAB_FRAME_FOREVER );
 
 	short mouse_x = 0, mouse_y = 0;
-	coordinates MouseCoords;
+	//coordinates MouseCoords;
 
 	// create file structure names, add format to top of data file
 	SYSTEMTIME systime;
