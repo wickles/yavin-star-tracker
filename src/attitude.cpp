@@ -52,7 +52,7 @@ We determine the eigenvalue of N by solving its characteristic quartic a[4].
 
 R is the rotation matrix
 */
-double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, coordinates* CoordOut, sfloat RotationOut[3][3])
+double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, coordinates* CoordOut, sfloat RMat[3][3], double RQuat[4])
 {
 	Timer timer;
 	timer.StartTimer();
@@ -169,15 +169,7 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 	debug_printf("eigenvalues: %f %f %f %f\n", rr[0], rr[1], rr[2], rr[3] );
 
 	//compute the rotation matrix from the quaternion
-	R[0][0] = eVector[0]*eVector[0] + eVector[1]*eVector[1] - eVector[2]*eVector[2] - eVector[3]*eVector[3];
-	R[0][1] = 2 * ( eVector[1]*eVector[2] - eVector[0]*eVector[3] );
-	R[0][2] = 2 * ( eVector[1]*eVector[3] + eVector[0]*eVector[2] );
-	R[1][0] = 2 * ( eVector[2]*eVector[1] + eVector[0]*eVector[3] );
-	R[1][1] = eVector[0]*eVector[0] - eVector[1]*eVector[1] + eVector[2]*eVector[2] - eVector[3]*eVector[3];
-	R[1][2] = 2 * ( eVector[2]*eVector[3] - eVector[0]*eVector[1] );
-	R[2][0] = 2 * ( eVector[3]*eVector[1] - eVector[0]*eVector[2] );
-	R[2][1] = 2 * ( eVector[3]*eVector[2] + eVector[0]*eVector[1] );
-	R[2][2] = eVector[0]*eVector[0] - eVector[1]*eVector[1] - eVector[2]*eVector[2] + eVector[3]*eVector[3];
+	GetMatrixFromQuat(R, eVector);
 
 	double rCenter[3];
 	double Rt[3][3];
@@ -216,13 +208,18 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 		CoordOut->DEC = (sfloat)tmpDec;
 	}
 
-
-	if ( RotationOut != NULL )
+	if ( RMat != NULL )
 	{
 		//print the R matrix
 		for (int i = 0; i < 3; i++)
 			for (int j = 0; j < 3; j++)
-				RotationOut[i][j] = (sfloat)R[i][j];
+				RMat[i][j] = (sfloat)R[i][j];
+	}
+
+	if ( RQuat != NULL )
+	{
+		for (int i = 0; i < 3; i++)
+			RQuat[i] = eVector[i];
 	}
 
 	return rms_error;

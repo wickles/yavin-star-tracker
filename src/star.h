@@ -122,6 +122,7 @@ void rotate(double x[3], double r[3], double theta, double out[3]);
 
 void GetSphericalFromImage(double x, double y, float FocalLength, double rOut[3]);
 void GetCoordsFromSpherical(double r[3], coordinates* Out);
+void GetMatrixFromQuat(double Rout[3][3], double q[4]);
 
 void GetDiscreteCoords(coordinates* coords, coords_discrete* out);
 

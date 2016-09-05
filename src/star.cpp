@@ -135,6 +135,19 @@ void GetDiscreteCoords(coordinates* coords, coords_discrete* out)
 	out->DEC_sec = fmod( abs(coords->DEC)*(180/M_PI)*60*60, 60);
 }
 
+void GetMatrixFromQuat(double Rout[3][3], double q[4])
+{
+	Rout[0][0] = SQUARE(q[0]) + SQUARE(q[1]) - SQUARE(q[2]) - SQUARE(q[3]);
+	Rout[0][1] = 2 * ( q[1]*q[2] - q[0]*q[3] );
+	Rout[0][2] = 2 * ( q[1]*q[3] + q[0]*q[2] );
+	Rout[1][0] = 2 * ( q[2]*q[1] + q[0]*q[3] );
+	Rout[1][1] = SQUARE(q[0]) - SQUARE(q[1]) + SQUARE(q[2]) - SQUARE(q[3]);
+	Rout[1][2] = 2 * ( q[2]*q[3] - q[0]*q[1] );
+	Rout[2][0] = 2 * ( q[3]*q[1] - q[0]*q[2] );
+	Rout[2][1] = 2 * ( q[3]*q[2] + q[0]*q[1] );
+	Rout[2][2] = SQUARE(q[0]) - SQUARE(q[1]) - SQUARE(q[2]) + SQUARE(q[3]);
+}
+
 double getJulianDate(SYSTEMTIME* systime)
 {
 	int A,B,C,E,F;																	//used for computing the Julian Date

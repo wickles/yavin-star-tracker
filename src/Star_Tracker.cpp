@@ -345,7 +345,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 
 					coordinates Coords;
 					sfloat R[3][3];
-					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &Coords, R);
+					sfloat RQuat[4];
+					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &Coords, R, RQuat);
 					Image_Correct_ID = ( rms_error <= 0.01 );
 
 					if ( Image_Correct_ID )
@@ -359,7 +360,7 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 						// Get Az, El
 						double relJDN = getJulianDate( &systime );
 						double LST, HA;
-						LST = getLST( Coords.RA, Coords.DEC, relJDN );
+						LST = getLST( Coords.RA, Settings.Longitude, relJDN );
 						HA = getHA1( LST, Coords.RA );
 						Image_Azi = getAzi( HA, Settings.Latitude, Coords.DEC );
 						Image_Ele = getEle( HA, Settings.Latitude, Coords.DEC );
@@ -386,15 +387,15 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 							{
 								coords_discrete coords;
 								GetDiscreteCoords(&Coords, &coords);
-								fprintf(file, "%02d/%02d/%04d \
-											   %02d:%02d:%02d.%03d,\
-											   %.4f, %.4f, %.1f,\
-											   %.6f, %.6f,\
-											   %02d:%02d:%f,\
-											   %02d:%02d:%f,\
-											   %.4f,%.4f,%d,\
-											   %.1f,%d,\
-											   %f,%f,%f,%f,%f,%f,%f,%f,%f\n",
+								fprintf(file, "%02d/%02d/%04d "
+											  "%02d:%02d:%02d.%03d,"
+											  "%.4f, %.4f, %.1f,"
+											  "%.6f, %.6f,"
+											  "%02d:%02d:%f,"
+											  "%02d:%02d:%f,"
+											  "%.4f,%.4f,%d,"
+											  "%.1f,%d,"
+											  "%f,%f,%f,%f\n",
 										systime.wMonth, systime.wDay, systime.wYear,
 										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
 										Settings.Latitude, Settings.Longitude, Settings.Altitude,
@@ -403,22 +404,20 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 										coords.DEC_deg, coords.DEC_min, coords.DEC_sec,
 										Image_Azi*180/M_PI, Image_Ele*180/M_PI, Ele_Corr,
 										Detector.mean_sky, num_detected,
-										Image_Rt[0][0], Image_Rt[0][1], Image_Rt[0][2],
-										Image_Rt[1][0], Image_Rt[1][1], Image_Rt[1][2],
-										Image_Rt[2][0], Image_Rt[2][1], Image_Rt[2][2]);
+										RQuat[0], RQuat[1], RQuat[2], RQuat[3] );
 
 								
 		//fprintf(file, "MM/DD/YYYY Time,LAT,LONG,ALT,RA,DEC,RA_hr,DEC_deg,AZI,ELE,AtmCorr,MeanSky,NumDetected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
 							}
 							else
 							{
-								fprintf(file, "%02d/%02d/%04d \
-											   %02d:%02d:%02d.%03d,\
-											   %.4f, %.4f, %.1f,\
-											   ERR,ERR,ERR,ERR,\
-											   ERR,ERR,ERR,\
-											   %.1f,%d,\
-											   ERR,ERR,ERR,ERR,ERR,ERR,ERR,ERR,ERR\n",
+								fprintf(file, "%02d/%02d/%04d "
+											  "%02d:%02d:%02d.%03d,"
+											  "%.4f, %.4f, %.1f,"
+											  "ERR,ERR,ERR,ERR,"
+											  "ERR,ERR,ERR,"
+											  "%.1f,%d,"
+											  "ERR,ERR,ERR,ERR\n",
 										systime.wMonth, systime.wDay, systime.wYear,
 										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
 										Settings.Latitude, Settings.Longitude, Settings.Altitude,
@@ -445,9 +444,9 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 					Settings.Latitude, Settings.Longitude, Settings.Altitude,
 					Image_Coords.RA*12/M_PI, Image_Coords.DEC*180/M_PI,
 					Image_Azi*180/M_PI, Image_Ele*180/M_PI,
-					num_detected, Mean_Sky_Level );
+					Ele_Corr, num_detected, Mean_Sky_Level );
 		else
-			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = ERR | (AZI, ELE) = ERR | Stars: %d | Mean: %f\n",
+			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = ERR | (AZI, ELE) = ERR | EleCorr: ERR | Stars: %d | Mean: %f\n",
 					Settings.Latitude, Settings.Longitude, Settings.Altitude,
 					num_detected, Mean_Sky_Level );
 #endif
@@ -635,11 +634,11 @@ int main(int argc, char* argv[])
 	FILE* file = fopen(output_name, "w");
 	if ( file != NULL )
 	{
-		fprintf(file, "MM/DD/YYYY Time,LAT (deg),LONG (deg),ALT (m),\
-					  RA (deg),DEC (deg),RA (hr:min:sec),DEC_deg (deg:min:sec),\
-					  AZI (deg),ELE (deg),EleCorr (arcsec),\
-					  MeanSky,NumDetected,\
-					  Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
+		fprintf(file, "MM/DD/YYYY Time,LAT (deg),LONG (deg),ALT (m),"
+					  "RA (deg),DEC (deg),RA (hr:min:sec),DEC_deg (deg:min:sec),"
+					  "AZI (deg),ELE (deg),EleCorr (arcsec),"
+					  "MeanSky,NumDetected,"
+					  "RQuat0,RQuat1,RQuat2,RQuat3\n");
 		fclose(file);
 	}
 	
