@@ -5,7 +5,6 @@ September 20, 2010
 
 #include "star.h"
 #include <vector>
-#include <Windows.h>
 
 #pragma once
 

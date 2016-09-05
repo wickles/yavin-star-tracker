@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Windows.h>
+
 //#define DEBUG_TEXT
 //#define PROMPT_USER
 #define SUBTRACT_DARK
@@ -122,3 +124,5 @@ void GetSphericalFromImage(double x, double y, float FocalLength, double rOut[3]
 void GetCoordsFromSpherical(double r[3], coordinates* Out);
 
 void GetDiscreteCoords(coordinates* coords, coords_discrete* out);
+
+double getJulianDate(SYSTEMTIME* systime);

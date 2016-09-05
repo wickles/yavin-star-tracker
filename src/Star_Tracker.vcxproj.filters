@@ -46,6 +46,9 @@
     <ClInclude Include="attitude.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="atmosphere.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="stdafx.cpp">
@@ -73,6 +76,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="catalog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="atmosphere.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

@@ -29,6 +29,7 @@ GUI.
 #include "identifier.h"
 #include "attitude.h"
 #include "timer.h"
+#include "atmosphere.h"
 
 using namespace std;
 
@@ -66,10 +67,15 @@ double Image_Rt[3][3] = {	{ 1, 0, 0 },
 							{ 0, 0, 1 } };
 // RA,DEC of image
 coordinates Image_Coords = {0, 0};
+//Azi, Ele of image
+double Image_Azi = 0.0;
+double Image_Ele = 0.0;
 // Local time of image
 SYSTEMTIME Image_LocalTime;
 // Whether attitude was correctly determined
 bool Image_Correct_ID = false;
+// Mean Sky Level
+float Mean_Sky_Level = 0.0f;
 // Whether there is a valid prior for use when identifying stars in new image
 bool Prior_Valid = false;
 // Contains coords of a previous image to make it easier to identify another image
@@ -103,9 +109,9 @@ struct settings_s {
 	int GreenGain;		// dB (6 - 41)
 	int BlueGain;		//
 	float DarkCoeff;
-	bool UsePrior;
-	float Prior_RA;
-	float Prior_DEC;
+	float Latitude;		// Degrees
+	float Longitude;	// 
+	float Altitude;	// ???
 } Settings;
 
 // CCD Camera settings
@@ -184,18 +190,14 @@ int CameraLoadSettings( const char* filename )
 	Settings.GreenGain =	clamp( IniGetInt( file, "GreenGain", 14 ), 6, 41 );
 	Settings.BlueGain =		clamp( IniGetInt( file, "BlueGain", 14 ), 6, 41 );
 	Settings.DarkCoeff =	IniGetFloat( file, "DarkCoeff", 1.0f );
-	Settings.UsePrior =		IniGetBool( file, "UsePrior", false );
-	Settings.Prior_RA =		IniGetFloat( file, "Prior_RA", 0.0f );
-	Settings.Prior_DEC =	IniGetFloat( file, "Prior_DEC", 0.0f );
+	Settings.Latitude =		IniGetFloat( file, "Latitude", 0.0f );
+	Settings.Longitude =	IniGetFloat( file, "Longitude", 0.0f );
+	Settings.Altitude =	IniGetFloat( file, "Altitude", 0.0f );
 
 	if ( file != NULL )
 		fclose(file);
-
-	Prior.coords.RA = Settings.Prior_RA;
-	Prior.coords.DEC = Settings.Prior_DEC;
-	Prior.tickCount = GetTickCount();
-	Prior_Valid = true;
 	
+	/*
 	printf( "TriggerMode: %s\n", (Settings.TriggerMode ? "True" : "False") );
 	printf( "DumpImages: %s\n", (Settings.DumpImages ? "True" : "False") );
 	printf( "DumpData: %s\n", (Settings.DumpData ? "True" : "False") );
@@ -211,9 +213,10 @@ int CameraLoadSettings( const char* filename )
 	printf( "GreenGain: %d\n", Settings.GreenGain );
 	printf( "BlueGain: %d\n", Settings.BlueGain );
 	printf( "DarkCoeff: %f\n", Settings.DarkCoeff );
-	printf( "UsePrior: %s\n", (Settings.UsePrior ? "True" : "False") );
-	printf( "Prior_RA: %f\n", Settings.Prior_RA );
-	printf( "Prior_DEC: %f\n", Settings.Prior_DEC );
+	printf( "Latitude: %f\n", Settings.Latitude );
+	printf( "Longitude: %f\n", Settings.Longitude );
+	printf( "Altitude: %f\n", Settings.Altitude );
+	*/
 
 	return 1;
 }
@@ -330,8 +333,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 				};
 
 				int num_stars = DetectStars(ImageStars, &Detector, &Image);
-
 				//printf( "	Number of Stars Detected: %d\n", num_stars );
+				Mean_Sky_Level = Detector.mean_sky;
 
 				if (ImageStars.size() >= 3)
 				{
@@ -350,6 +353,15 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 						Prior_Valid = true;
 
 						Image_Coords = Coords;
+
+						// Get Az, El
+						double relJDN = getJulianDate( &systime );
+						double LST, HA;
+						LST = getLST( Coords.RA, Coords.DEC, relJDN );
+						HA = getHA1( LST, Coords.RA );
+						Image_Azi = getAzi( HA, Settings.Latitude, Coords.DEC );
+						Image_Ele = getEle( HA, Settings.Latitude, Coords.DEC );
+
 
 						int i, j;
 						for ( i = 0; i < 3; i++ )
@@ -431,6 +443,12 @@ int main(int argc, char* argv[])
 
 	printf( "Loading camera settings from file: %s\n", settings_file );
 	CameraLoadSettings(settings_file);
+
+	// Setup Priors
+	Prior.coords.RA = 0.0f;
+	Prior.coords.DEC = 0.0f;
+	Prior.tickCount = GetTickCount();
+	Prior_Valid = true;
 
 	if ( Settings.BitMode != 12 )
 	{
@@ -603,10 +621,18 @@ int main(int argc, char* argv[])
 		DrawSDLText( font, screen, 0, yText, "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
 											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
 		yText += FONT_SIZE;
+		DrawSDLText( font, screen, 0, yText, "Mean Sky Level: %f", Mean_Sky_Level );
+		yText += FONT_SIZE;
 		if ( Image_Correct_ID )
+		{
 			DrawSDLText( font, screen, 0, yText, "Camera (RA, DEC) = (%.10f, %.10f)", Image_Coords.RA, Image_Coords.DEC );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "Camera (AZI, ELE) = (%.5f, %.5f)", Image_Azi, Image_Ele );
+		}
 		else
 			DrawSDLText( font, screen, 0, yText, "Camera (RA, DEC) = INVALID" );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "Camera (AZI, ELE) = INVALID" );
 		yText += FONT_SIZE;
 		if ( Image_Correct_ID )
 			DrawSDLText( font, screen, 0, yText, "Mouse (%d, %d), (RA, DEC) = (%.10f, %.10f)", mouse_x, mouse_y, MouseCoords.RA, MouseCoords.DEC );
@@ -640,9 +666,10 @@ int main(int argc, char* argv[])
 											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
 											*/
 		if ( Image_Correct_ID )
-			printf( "Camera (RA, DEC) = (%.10f, %.10f)\n", Image_Coords.RA, Image_Coords.DEC );
+			printf( "MeanSky: %f | (RA, DEC) = (%.10f, %.10f) | (AZI, ELE) = (%.5f, %.5f)\n",
+					Mean_Sky_Level, Image_Coords.RA, Image_Coords.DEC, Image_Azi, Image_Ele );
 		else
-			printf( "Camera (RA, DEC) = INVALID\n" );
+			printf( "MeanSky: %f | (RA, DEC) = INVALID | (AZI, ELE) = INVALID\n", Mean_Sky_Level );
 #endif
 
 		// The following is to let camera engine to be active..it needs message loop.

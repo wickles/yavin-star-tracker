@@ -7,23 +7,6 @@
 
 using namespace std;
 
-// determines the julian date from computer clock
-static double getJulianDate(SYSTEMTIME* systime)
-{
-	int A,B,C,E,F;																	//used for computing the Julian Date
-	double JDN;
-
-	A = (int) (systime->wYear/100);
-	B = (int) (A/4);
-	C = 2 - A + B;
-	E = (int) (365.25 * (systime->wYear + 4716));
-	F = (int) (30.6001 * (systime->wMonth + 1));
-	JDN = (double)(C + E + F + systime->wDay - 1524.5);
-
-	return JDN	+ (double)systime->wHour/24 + (double)systime->wMinute/(24*60)
-				+ (double)systime->wSecond/(24*60*60) + (double)systime->wMilliseconds/(24*60*60*1000);
-}
-
 // arguments in RADIANS (or RADIANS / YEARS). Takes RA,DEC,proper motion, and uses time to find new RA and DEC. Puts that in tempRA and tempDEC
 static void updateCoordinates(double* RA, double* Dec, double pmRA, double pmDEC, double t, double zeta, double z, double theta)
 {

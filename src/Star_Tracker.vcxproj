@@ -118,6 +118,7 @@
     <None Include="settings.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="atmosphere.h" />
     <ClInclude Include="attitude.h" />
     <ClInclude Include="BUF_USBCCDCamera_SDK.h" />
     <ClInclude Include="catalog.h" />
@@ -129,6 +130,7 @@
     <ClInclude Include="timer.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="atmosphere.cpp" />
     <ClCompile Include="attitude.cpp" />
     <ClCompile Include="catalog.cpp" />
     <ClCompile Include="detector.cpp" />
