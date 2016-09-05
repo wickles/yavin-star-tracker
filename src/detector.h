@@ -18,6 +18,7 @@ struct detector_s {
 	int local_height;		// box height for above
 	int local_sample_skip;	// distance to next pixel in local sample
 	int star_min_outstnd;
+	sfloat mean_sky;
 };
 
 // ImageStars -- vector to be cleared and filled with image stars

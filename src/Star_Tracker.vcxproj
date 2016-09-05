@@ -64,6 +64,7 @@
     <LinkIncremental>false</LinkIncremental>
     <IncludePath>C:\SDL-1.2.14\include;$(IncludePath)</IncludePath>
     <LibraryPath>C:\SDL-1.2.14\lib;$(LibraryPath)</LibraryPath>
+    <TargetName>$(ProjectName)_silent</TargetName>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>

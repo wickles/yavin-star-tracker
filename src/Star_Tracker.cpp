@@ -373,23 +373,33 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 								coords_discrete coords;
 								GetDiscreteCoords(&Coords, &coords);
 								//fprintf(file, "%02d/%02d/%04d %02d:%02d:%02d.%03d | (RA, DEC) = (%.15f, %.15f) = (%02d:%02d:%f, %02d:%02d:%f) | Rt = { { %f, %f, %f }, { %f, %f, %f }, { %f, %f, %f } }\n",
-								fprintf(file, "%02d/%02d/%04d %02d:%02d:%02d.%03d,%.15f,%.15f,%02d:%02d:%f,%02d:%02d:%f,%d,%f,%f,%f,%f,%f,%f,%f,%f,%f\n",
+								fprintf(file, "%02d/%02d/%04d \
+											   %02d:%02d:%02d.%03d,\
+											   %.15f,%.15f,\
+											   %02d:%02d:%f,\
+											   %02d:%02d:%f,\
+											   %f,%d,\
+											   %f,%f,%f,%f,%f,%f,%f,%f,%f\n",
 										systime.wMonth, systime.wDay, systime.wYear,
 										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
 										Coords.RA, Coords.DEC,
 										coords.RA_hr, coords.RA_min, coords.RA_sec,
 										coords.DEC_deg, coords.DEC_min, coords.DEC_sec,
-										num_stars,
+										Detector.mean_sky, num_stars,
 										Image_Rt[0][0], Image_Rt[0][1], Image_Rt[0][2],
 										Image_Rt[1][0], Image_Rt[1][1], Image_Rt[1][2],
 										Image_Rt[2][0], Image_Rt[2][1], Image_Rt[2][2]);
 							}
 							else
 							{
-								fprintf(file, "%02d/%02d/%04d %02d:%02d:%02d.%03d,FAIL,FAIL,FAIL,FAIL,%d,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL\n",
+								fprintf(file, "%02d/%02d/%04d \
+											   %02d:%02d:%02d.%03d,\
+											   FAIL,FAIL,FAIL,FAIL,\
+											   %f,%d,\
+											   FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL\n",
 										systime.wMonth, systime.wDay, systime.wYear,
 										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
-										num_stars );
+										Detector.mean_sky, num_stars );
 							}
 							fclose(file);
 						}

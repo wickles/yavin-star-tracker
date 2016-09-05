@@ -168,6 +168,9 @@ size_t DetectStars(vector<image_star>& ImageStars, detector_s* Detector, image_s
 	vector<short> LocalSample;
 	LocalSample.reserve( (Detector->local_width/Detector->local_sample_skip-1) * (Detector->local_height/Detector->local_sample_skip-1) );
 
+	unsigned long long sky_sum = 0;
+	unsigned int sky_count = 0;
+
 	debug_printf("Detecting stars...\n");
 	int i, j, x, y;
 	for ( j = 0; j < Image->height; j += Detector->local_height)
@@ -188,6 +191,7 @@ size_t DetectStars(vector<image_star>& ImageStars, detector_s* Detector, image_s
 			short Q3 = LocalSample[ N*3/4 ];
 
 			int low_val = (int)( Q3 + 1.0f * ( Q3 - Q1 ) );
+			sfloat outst_val = 0.6f * ( Q3 - Q1 );
 
 #if 0
 			printf("(%02d, %02d) min = %d, Q1 = %d, median = %d, Q3 = %d, max = %d, outliers at %d\n",
@@ -197,10 +201,17 @@ size_t DetectStars(vector<image_star>& ImageStars, detector_s* Detector, image_s
 			// get star pixels and find centroid
 			for ( y = j; y < j + Detector->local_height && y < Image->height; y++ )
 				for ( x = i; x < i + Detector->local_width && x < Image->width; x++ )
-					if (	!is_marked(Image, marked, x, y) &&
-							isOutstanding(Image, x, y, low_val) &&
-							mean_over_area(Image, x, y, 1) >= Q3 + 0.6f * ( Q3 - Q1 ) )
+				{
+					if ( !isOutstanding(Image, x, y, low_val) )
+					{
+						sky_sum += get_pixel(Image, x, y);
+						sky_count += 1;
+					}
+					else if ( !is_marked(Image, marked, x, y) && mean_over_area(Image, x, y, 1) >= Q3 + outst_val )
+					{
 						CentroidAt(Image, marked, ImageStars, low_val, sample_min, x, y);
+					}
+				}
 		}
 	}
 
@@ -213,6 +224,8 @@ size_t DetectStars(vector<image_star>& ImageStars, detector_s* Detector, image_s
 #endif
 
 	timer.StopTimer();
+
+	Detector->mean_sky = (sfloat) ((double)sky_sum / sky_count);
 
 #ifdef DEBUG_TEXT
 	vector<image_star>::iterator it;
