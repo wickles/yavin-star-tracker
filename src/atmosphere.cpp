@@ -71,7 +71,7 @@ double correctEle(double ELE, double height, double temp)
 
 	correction = correction*pow(1-0.0000225577*height,5.25588)*283/(273+temp); // correct for temperature and pressure
 
-	return ELE - correction * (M_PI / 180); // should possibly be a +
+	return ELE + correction * (M_PI / 180); 
 }
 
 //The backwards transformations can be written essentially the same way.

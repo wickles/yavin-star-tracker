@@ -70,6 +70,8 @@ coordinates Image_Coords = {0, 0};
 //Azi, Ele of image
 double Image_Azi = 0.0;
 double Image_Ele = 0.0;
+int Ele_Corr = 0;
+int num_detected = 0;
 // Local time of image
 SYSTEMTIME Image_LocalTime;
 // Whether attitude was correctly determined
@@ -111,7 +113,7 @@ struct settings_s {
 	float DarkCoeff;
 	float Latitude;		// Degrees
 	float Longitude;	// 
-	float Altitude;	// ???
+	float Altitude;		// meters
 } Settings;
 
 // CCD Camera settings
@@ -332,8 +334,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 					NULL
 				};
 
-				int num_stars = DetectStars(ImageStars, &Detector, &Image);
-				//printf( "	Number of Stars Detected: %d\n", num_stars );
+				num_detected = DetectStars(ImageStars, &Detector, &Image);
+				//printf( "	Number of Stars Detected: %d\n", num_detected );
 				Mean_Sky_Level = Detector.mean_sky;
 
 				if (ImageStars.size() >= 3)
@@ -361,7 +363,7 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 						HA = getHA1( LST, Coords.RA );
 						Image_Azi = getAzi( HA, Settings.Latitude, Coords.DEC );
 						Image_Ele = getEle( HA, Settings.Latitude, Coords.DEC );
-
+						//Ele_Corr = correctEle( );
 
 						int i, j;
 						for ( i = 0; i < 3; i++ )
@@ -384,34 +386,43 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 							{
 								coords_discrete coords;
 								GetDiscreteCoords(&Coords, &coords);
-								//fprintf(file, "%02d/%02d/%04d %02d:%02d:%02d.%03d | (RA, DEC) = (%.15f, %.15f) = (%02d:%02d:%f, %02d:%02d:%f) | Rt = { { %f, %f, %f }, { %f, %f, %f }, { %f, %f, %f } }\n",
 								fprintf(file, "%02d/%02d/%04d \
 											   %02d:%02d:%02d.%03d,\
-											   %.15f,%.15f,\
+											   %.4f, %.4f, %.1f,\
+											   %.6f, %.6f,\
 											   %02d:%02d:%f,\
 											   %02d:%02d:%f,\
-											   %f,%d,\
+											   %.4f,%.4f,%d,\
+											   %.1f,%d,\
 											   %f,%f,%f,%f,%f,%f,%f,%f,%f\n",
 										systime.wMonth, systime.wDay, systime.wYear,
 										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
-										Coords.RA, Coords.DEC,
+										Settings.Latitude, Settings.Longitude, Settings.Altitude,
+										Coords.RA*180/M_PI, Coords.DEC*180/M_PI,
 										coords.RA_hr, coords.RA_min, coords.RA_sec,
 										coords.DEC_deg, coords.DEC_min, coords.DEC_sec,
-										Detector.mean_sky, num_stars,
+										Image_Azi*180/M_PI, Image_Ele*180/M_PI, Ele_Corr,
+										Detector.mean_sky, num_detected,
 										Image_Rt[0][0], Image_Rt[0][1], Image_Rt[0][2],
 										Image_Rt[1][0], Image_Rt[1][1], Image_Rt[1][2],
 										Image_Rt[2][0], Image_Rt[2][1], Image_Rt[2][2]);
+
+								
+		//fprintf(file, "MM/DD/YYYY Time,LAT,LONG,ALT,RA,DEC,RA_hr,DEC_deg,AZI,ELE,AtmCorr,MeanSky,NumDetected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
 							}
 							else
 							{
 								fprintf(file, "%02d/%02d/%04d \
 											   %02d:%02d:%02d.%03d,\
-											   FAIL,FAIL,FAIL,FAIL,\
-											   %f,%d,\
-											   FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL,FAIL\n",
+											   %.4f, %.4f, %.1f,\
+											   ERR,ERR,ERR,ERR,\
+											   ERR,ERR,ERR,\
+											   %.1f,%d,\
+											   ERR,ERR,ERR,ERR,ERR,ERR,ERR,ERR,ERR\n",
 										systime.wMonth, systime.wDay, systime.wYear,
 										systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds,
-										Detector.mean_sky, num_stars );
+										Settings.Latitude, Settings.Longitude, Settings.Altitude,
+										Detector.mean_sky, num_detected );
 							}
 							fclose(file);
 						}
@@ -423,6 +434,23 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 				}
 			}
 		} // Settings.ProcessImages
+#ifndef SDL_ENABLED
+		/*
+		printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
+											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+											*/
+		// RA = hour.6, DEC = deg.4, AZI,ELE = deg.4
+		if ( Image_Correct_ID )
+			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | EleCorr: %d | Stars: %d | Mean: %f\n",
+					Settings.Latitude, Settings.Longitude, Settings.Altitude,
+					Image_Coords.RA*12/M_PI, Image_Coords.DEC*180/M_PI,
+					Image_Azi*180/M_PI, Image_Ele*180/M_PI,
+					num_detected, Mean_Sky_Level );
+		else
+			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = ERR | (AZI, ELE) = ERR | Stars: %d | Mean: %f\n",
+					Settings.Latitude, Settings.Longitude, Settings.Altitude,
+					num_detected, Mean_Sky_Level );
+#endif
 	}
 }
 
@@ -607,38 +635,77 @@ int main(int argc, char* argv[])
 	FILE* file = fopen(output_name, "w");
 	if ( file != NULL )
 	{
-		fprintf(file, "Month/Day/Year Hour:Minute:Second:Millisecond,RA,DEC,RA_hr,DEC_deg,Mean_Sky,Num_Detected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
+		fprintf(file, "MM/DD/YYYY Time,LAT (deg),LONG (deg),ALT (m),\
+					  RA (deg),DEC (deg),RA (hr:min:sec),DEC_deg (deg:min:sec),\
+					  AZI (deg),ELE (deg),EleCorr (arcsec),\
+					  MeanSky,NumDetected,\
+					  Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
 		fclose(file);
 	}
-
+	
 	printf( "Entering main loop.\n" );
 	while ( !fault )
 	{
 		// Handle SDL drawing
 #ifdef SDL_ENABLED
+		// TODO: Write better interface for SDL text...
 		SDL_BlitSurface( CCD_surface, NULL, screen, NULL );
 		int yText = 0;
 		DrawSDLText( font, screen, 0, yText, "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
 											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
 		yText += FONT_SIZE;
-		DrawSDLText( font, screen, 0, yText, "Mean Sky Level: %f", Mean_Sky_Level );
+		DrawSDLText( font, screen, 0, yText, "Mean Sky Level: %.1f", Mean_Sky_Level );
+		yText += FONT_SIZE;
+		DrawSDLText( font, screen, 0, yText, "Stars Detected: %d", num_detected );
+		yText += FONT_SIZE;
+		DrawSDLText( font, screen, 0, yText, "Latitude:  %.4f", Settings.Latitude );
+		yText += FONT_SIZE;
+		DrawSDLText( font, screen, 0, yText, "Longitude: %.4f", Settings.Longitude );
+		yText += FONT_SIZE;
+		DrawSDLText( font, screen, 0, yText, "Altitude:  %.1f", Settings.Altitude );
 		yText += FONT_SIZE;
 		if ( Image_Correct_ID )
 		{
-			DrawSDLText( font, screen, 0, yText, "Camera (RA, DEC) = (%.10f, %.10f)", Image_Coords.RA, Image_Coords.DEC );
+			DrawSDLText( font, screen, 0, yText, "RA: %.6f", Image_Coords.RA*12/M_PI );
 			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "Camera (AZI, ELE) = (%.5f, %.5f)", Image_Azi, Image_Ele );
+			DrawSDLText( font, screen, 0, yText, "DEC: %.4f", Image_Coords.DEC*180/M_PI );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "AZI: %.4f", Image_Azi*180/M_PI );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "ELE: %.4f", Image_Ele*180/M_PI );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "Ele Corr: %d", Ele_Corr );
+			yText += FONT_SIZE;
 		}
 		else
-			DrawSDLText( font, screen, 0, yText, "Camera (RA, DEC) = INVALID" );
+		{
+			DrawSDLText( font, screen, 0, yText, "RA:  ERR" );
 			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "Camera (AZI, ELE) = INVALID" );
+			DrawSDLText( font, screen, 0, yText, "DEC: ERR" );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "AZI: ERR" );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "ELE: ERR" );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "Ele Corr: ERR" );
+			yText += FONT_SIZE;
+		}
+		DrawSDLText( font, screen, 0, yText, "Mouse: (%d,%d)", mouse_x, mouse_y );
 		yText += FONT_SIZE;
 		if ( Image_Correct_ID )
-			DrawSDLText( font, screen, 0, yText, "Mouse (%d, %d), (RA, DEC) = (%.10f, %.10f)", mouse_x, mouse_y, MouseCoords.RA, MouseCoords.DEC );
+		{
+			DrawSDLText( font, screen, 0, yText, "MouseRA:  %.6f", MouseCoords.RA*12/M_PI );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "MouseDEC: %.4f", MouseCoords.DEC*180/M_PI );
+			yText += FONT_SIZE;
+		}
 		else
-			DrawSDLText( font, screen, 0, yText, "Mouse (%d, %d), (RA, DEC) = INVALID", mouse_x, mouse_y );
-		yText += FONT_SIZE;
+		{
+			DrawSDLText( font, screen, 0, yText, "MouseRA:  ERR" );
+			yText += FONT_SIZE;
+			DrawSDLText( font, screen, 0, yText, "MouseDEC: ERR" );
+			yText += FONT_SIZE;
+		}
 		SDL_Flip(screen);
 		// Handle SDL events
 		while( SDL_PollEvent( &event ) )
@@ -660,16 +727,6 @@ int main(int argc, char* argv[])
 				break;
 			}
 		}
-#else
-		/*
-		printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
-											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
-											*/
-		if ( Image_Correct_ID )
-			printf( "MeanSky: %f | (RA, DEC) = (%.10f, %.10f) | (AZI, ELE) = (%.5f, %.5f)\n",
-					Mean_Sky_Level, Image_Coords.RA, Image_Coords.DEC, Image_Azi, Image_Ele );
-		else
-			printf( "MeanSky: %f | (RA, DEC) = INVALID | (AZI, ELE) = INVALID\n", Mean_Sky_Level );
 #endif
 
 		// The following is to let camera engine to be active..it needs message loop.
