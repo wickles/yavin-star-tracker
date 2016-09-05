@@ -323,7 +323,8 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 					LOCAL_WIDTH,
 					LOCAL_HEIGHT,
 					LOCAL_SAMPLE_SKIP,
-					STAR_MIN_OUTSTND
+					STAR_MIN_OUTSTND,
+					0.0
 				};
 				image_s Image = {
 					Settings.ImageWidth,
@@ -336,7 +337,7 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 
 				num_detected = DetectStars(ImageStars, &Detector, &Image);
 				//printf( "	Number of Stars Detected: %d\n", num_detected );
-				Mean_Sky_Level = Detector.mean_sky;
+				Mean_Sky_Level = (float)Detector.mean_sky;
 
 				if (ImageStars.size() >= 3)
 				{
@@ -440,13 +441,13 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 											*/
 		// RA = hour.6, DEC = deg.4, AZI,ELE = deg.4
 		if ( Image_Correct_ID )
-			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | EleCorr: %d | Stars: %d | Mean: %f\n",
+			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | EleCorr: %d | Stars: %d | Mean: %.1f\n",
 					Settings.Latitude, Settings.Longitude, Settings.Altitude,
 					Image_Coords.RA*12/M_PI, Image_Coords.DEC*180/M_PI,
 					Image_Azi*180/M_PI, Image_Ele*180/M_PI,
 					Ele_Corr, num_detected, Mean_Sky_Level );
 		else
-			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = ERR | (AZI, ELE) = ERR | EleCorr: ERR | Stars: %d | Mean: %f\n",
+			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = ERR | (AZI, ELE) = ERR | EleCorr: ERR | Stars: %d | Mean: %.1f\n",
 					Settings.Latitude, Settings.Longitude, Settings.Altitude,
 					num_detected, Mean_Sky_Level );
 #endif

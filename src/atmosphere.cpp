@@ -82,6 +82,7 @@ double getHA2(double AZI, double LAT, double ELE)
 	double HA = atan2( -sin(AZI), tan(ELE) * cos(LAT) - sin(LAT) * cos(AZI) );
 	if (HA < 0)
 		HA += 2*M_PI;
+	return HA;
 }
 
 double getDEC(double AZI, double LAT, double ELE)
