@@ -12,10 +12,15 @@
 
 // TODO: reference additional headers your program requires here
 
+// Comment out to disable SDL
+//#define SDL_ENABLED
+
 #include <windows.h>
 #include "BUF_USBCCDCamera_SDK.h"
-#include <SDL.h>
-#include <SDL_ttf.h>
+#ifdef SDL_ENABLED
+#include "SDL/SDL.h"
+#include "SDL/SDL_ttf.h"
+#endif
 
 using namespace std;
 

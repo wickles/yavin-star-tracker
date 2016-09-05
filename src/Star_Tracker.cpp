@@ -119,6 +119,7 @@ struct camera_s {
 	bool EngineStarted;
 } Camera;
 
+#ifdef SDL_ENABLED
 // Easy function to draw text using SDL
 void DrawSDLText(TTF_Font* font, SDL_Surface* dst, int x, int y, char* format, ... )
 {
@@ -138,6 +139,7 @@ void DrawSDLText(TTF_Font* font, SDL_Surface* dst, int x, int y, char* format, .
 
 	SDL_FreeSurface(msg);
 }
+#endif
 
 // clamps x < a to x = a, x > b to x = b
 int clamp(int x, int a, int b)
@@ -473,6 +475,7 @@ int main(int argc, char* argv[])
 	if ( pixel_data != NULL )
 		memset( pixel_data, 0, Settings.ImageWidth*Settings.ImageHeight*sizeof(unsigned short) );
 
+#ifdef SDL_ENABLED
 	// Initialize SDL
 	ret = SDL_Init( SDL_INIT_VIDEO );
 	printf( "SDL_Init returns %d\n", ret );
@@ -490,6 +493,7 @@ int main(int argc, char* argv[])
 													bytes_pp*8, Settings.ImageWidth*bytes_pp,
 													0x0ff0, 0x0ff0, 0x0ff0, 0);
 	//printf( "CCD_surface at 0x%08X\n", (unsigned int)CCD_surface );
+#endif
 	
 	if ( Settings.ProcessImages )
 	{
@@ -583,6 +587,7 @@ int main(int argc, char* argv[])
 	while ( !fault )
 	{
 		// Handle SDL drawing
+#ifdef SDL_ENABLED
 		SDL_BlitSurface( CCD_surface, NULL, screen, NULL );
 		int yText = 0;
 		DrawSDLText( font, screen, 0, yText, "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
@@ -619,6 +624,14 @@ int main(int argc, char* argv[])
 				break;
 			}
 		}
+#else
+		printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
+											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+		if ( Image_Correct_ID )
+			printf( "Camera (RA, DEC) = (%.10f, %.10f)", Image_Coords.RA, Image_Coords.DEC );
+		else
+			printf( "Camera (RA, DEC) = INVALID" );
+#endif
 
 		// The following is to let camera engine to be active..it needs message loop.
 		if ( PeekMessage( &msg, NULL, 0, 0, PM_REMOVE ) )
@@ -661,9 +674,11 @@ int main(int argc, char* argv[])
 exit:
 	printf( "Cleaning up.\n" );
 
+#ifdef SDL_ENABLED
     TTF_CloseFont( font );
     TTF_Quit();
 	SDL_Quit();
+#endif
 
 	BUFCCDUSB_InstallFrameHooker( FRAME_TYPE, NULL );
 	BUFCCDUSB_StopFrameGrab();
@@ -672,8 +687,10 @@ exit:
 	if ( Camera.Initialized )
 		BUFCCDUSB_UnInitDevice();
 	
+#ifdef SDL_ENABLED
 	if ( CCD_surface != NULL )
 		SDL_FreeSurface( CCD_surface );
+#endif
 
 	if (pixel_data != NULL)
 		delete[] pixel_data;

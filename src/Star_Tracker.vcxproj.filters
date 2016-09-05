@@ -78,5 +78,8 @@
   </ItemGroup>
   <ItemGroup>
     <Library Include="BUF_USBCCDCamera_SDK.lib" />
+    <Library Include="SDL.lib" />
+    <Library Include="SDLmain.lib" />
+    <Library Include="SDL_ttf.lib" />
   </ItemGroup>
 </Project>
