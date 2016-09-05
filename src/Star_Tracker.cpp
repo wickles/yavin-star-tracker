@@ -589,7 +589,7 @@ int main(int argc, char* argv[])
 	FILE* file = fopen(output_name, "w");
 	if ( file != NULL )
 	{
-		fprintf(file, "Month/Day/Year Hour:Minute:Second:Millisecond,RA,DEC,RA_hr,DEC_deg,Num_Detected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
+		fprintf(file, "Month/Day/Year Hour:Minute:Second:Millisecond,RA,DEC,RA_hr,DEC_deg,Mean_Sky,Num_Detected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
 		fclose(file);
 	}
 
@@ -635,12 +635,14 @@ int main(int argc, char* argv[])
 			}
 		}
 #else
+		/*
 		printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
 											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+											*/
 		if ( Image_Correct_ID )
-			printf( "Camera (RA, DEC) = (%.10f, %.10f)", Image_Coords.RA, Image_Coords.DEC );
+			printf( "Camera (RA, DEC) = (%.10f, %.10f)\n", Image_Coords.RA, Image_Coords.DEC );
 		else
-			printf( "Camera (RA, DEC) = INVALID" );
+			printf( "Camera (RA, DEC) = INVALID\n" );
 #endif
 
 		// The following is to let camera engine to be active..it needs message loop.
