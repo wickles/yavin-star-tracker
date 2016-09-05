@@ -361,12 +361,12 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 						// Get Az, El
 						SYSTEMTIME systime;
 						GetSystemTime( &systime );
-						double relJDN = getJulianDate( &systime );
+						double JDN = getJulianDate( &systime );
 						double LAT = Settings.Latitude * M_PI / 180;
 						double LONG = Settings.Longitude * M_PI / 180;
-						//printf("Julian: %f\n", relJDN);
+						//printf("Julian: %f\n", JDN);
 						double LST, HA;
-						LST = getLST( Coords.RA, LONG, relJDN );
+						LST = getLST( LONG, JDN );
 						HA = getHA1( LST, Coords.RA );
 						Image_Azi = getAzi( HA, LAT, Coords.DEC );
 						Image_Ele = getEle( HA, LAT, Coords.DEC );
@@ -472,31 +472,31 @@ int main(int argc, char* argv[])
 
 	int ret;
 
-	//TEST
-	/*
-		SYSTEMTIME time;
-		GetSystemTime( &time );
-		double relJDN = getJulianDate( &time );
-		double LAT = 0.0;
-		double LONG = 0.0;
-		double RA = 0.0;
-		double DEC = M_PI/2;
-		//printf("Julian: %f\n", relJDN);
-		double LST, HA;
-		LST = getLST( LONG, relJDN );
-		HA = getHA1( LST, RA );
-		Image_Azi = getAzi( HA, LAT, DEC );
-		Image_Ele = getEle( HA, LAT, DEC );
-
-		printf("JDN = %f | (LAT,LONG) = (%f,%f) | (RA,DEC) = (%f,%f) | (LST, HA) = (%f,%f) | (AZI,EL) = (%f, %f)",
-				relJDN, LAT, LONG, RA, DEC, LST, HA, Image_Azi, Image_Ele);
-				*/
-	//TEST
-
 	ImageStars.reserve( 500 );
 
 	printf( "Loading camera settings from file: %s\n", settings_file );
 	CameraLoadSettings(settings_file);
+	
+	//TEST
+	/*
+		SYSTEMTIME time;
+		GetSystemTime( &time );
+		double JDN = getJulianDate( &time );
+		double LAT = Settings.Latitude * M_PI / 180;
+		double LONG = Settings.Longitude * M_PI / 180;
+		double RA = 0.009126;
+		double DEC = 0.6938;
+		//printf("Julian: %f\n", relJDN);
+		double LST, HA;
+		LST = getLST( LONG, JDN );
+		HA = getHA1( LST, RA );
+		Image_Azi = getAzi( HA, LAT, DEC );
+		Image_Ele = getEle( HA, LAT, DEC );
+
+		printf("JDN = %f | (LAT,LONG) = (%f,%f) | (RA,DEC) = (%f,%f) | (LST, HA) = (%f,%f) | (AZI,EL) = (%f, %f)\n",
+				JDN, LAT, LONG, RA, DEC, LST, HA, Image_Azi, Image_Ele);
+	*/
+	//TEST
 
 	// Setup Priors
 	Prior.coords.RA = 0.0f;
@@ -648,7 +648,7 @@ int main(int argc, char* argv[])
 		BUFCCDUSB_StartFrameGrab( GRAB_FRAME_FOREVER );
 
 	short mouse_x = 0, mouse_y = 0;
-	//coordinates MouseCoords;
+	coordinates MouseCoords;
 
 	// create file structure names, add format to top of data file
 	SYSTEMTIME systime;

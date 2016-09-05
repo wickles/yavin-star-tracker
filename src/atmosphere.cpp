@@ -18,11 +18,12 @@ the new azimuth and elevation angles, which are then transformed back to (correc
 using namespace std;
 
 //more information on http://www.usno.navy.mil/USNO/astronomical-applications/astronomical-information-center/approx-sider-time/?searchterm=GAST
-double getLST(double LONG, double relJDN) //compute the Hour Angle in Radians
+double getLST(double LONG, double JDN) //compute the Hour Angle in Radians
 {
-	double GMST, LST;									//Julian Date since J2000 (in days)
-	GMST = fmod(18.697374558 + 24.06570982441908 * relJDN, 24);			//compute the Greenwtch Mean Sidereal Time (in hours)
-	LST = LONG * 12 / M_PI + GMST;													//compute the mean Local Sidereal Time (in hours)
+	double D, GMST, LST;
+	D = JDN - 2451545.0;													//Julian Date since J2000 (in days)
+	GMST = fmod(18.697374558 + 24.06570982441908 * D, 24);					//compute the Greenwtch Mean Sidereal Time (in hours)
+	LST = LONG * 12 / M_PI + GMST;											//compute the mean Local Sidereal Time (in hours)
 	if (LST < 0)															//make sure LST in the right range (0-24 hours)
 		LST += 24;
 	if (LST > 24)
@@ -49,8 +50,6 @@ double getAzi(double HA, double LAT, double DEC)
 		AZI = AZI + 2*M_PI;
 	return AZI;
 }
-
-
 
 //based on the information found at http://www.esrl.noaa.gov/gmd/grad/solcalc/calcdetails.html
 //this model uses two different approximations for different cases, when the elevation

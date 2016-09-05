@@ -4,7 +4,7 @@
 
 //more information on http://www.usno.navy.mil/USNO/astronomical-applications/astronomical-information-center/approx-sider-time/?searchterm=GAST
 //compute the Hour Angle in Radians
-double getLST(double RA, double LONG, double relJDN);
+double getLST(double LONG, double JDN);
 double getHA1(double LST, double RA);
 double getEle(double HA, double LAT, double DEC);
 double getAzi(double HA, double LAT, double DEC);
