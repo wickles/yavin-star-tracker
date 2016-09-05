@@ -1,0 +1,16 @@
+TriggerMode =	FALSE	// Enable (TRUE) or disable (FALSE) trigger mode
+DumpImages =	FALSE	// Dump raw image data
+DumpData =		TRUE	// Dump RA,DEC and Rotation Matrix with timestamp
+ProcessImages =	TRUE	// Process image for stars to find attitude
+BitMode12 =		TRUE	// 12 bits (true) or 8 bits (false) (8 bits not guaranteed to work)
+FocalLength =	4293.0	// Focal Length of lens in pixel units
+CaptureDelay =	100	// milliseconds -- camera runs at 14-15 fps, generally use more than 100ms
+BinMode =		1		// Bin mode, 1 x n vertical binning
+ExposureTime =	50		// milliseconds (1 - 200,000)
+RedGain =		15		//
+GreenGain =		15		// dB (6 - 41)
+BlueGain =		15		//
+DarkCoeff =		0.75	// Coefficient to multiply dark image by when subtracting from CCD image
+UsePrior =		FALSE	// Whether to use below information or not
+Prior_RA =		0.000	// RA and DEC in radians.
+Prior_DEC =		0.000
