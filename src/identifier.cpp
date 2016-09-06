@@ -8,6 +8,9 @@ September 20, 2010
 #include <algorithm>
 #include "timer.h"
 
+#define NUM_CANDIDATES 5
+#define NUM_PARTIAL_SORT 20
+
 using namespace std;
 
 typedef unsigned int vote_t;
@@ -180,10 +183,6 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 	// create candidate_vector (vector of candidate_t objects) for each image star, to be used for NEXT voting stage
 	candidate_vector* candidates_vec = new candidate_vector[ImageStars.size()];
 
-	//int low_votes = int( LOW_VOTES_COEFF*ImageStars.size() );
-
-#define NUM_CANDIDATES 5
-#define NUM_PARTIAL_SORT 20
 
 	// declare loop counters
 	int i, j;
@@ -218,108 +217,66 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 		}
 	}
 
-
-	// VOTING STAGE 2
-	// iterate over distinct image star pairs i<j
-	for ( i = 0; i < ImageStars.size()-1; i++ )
+	
+	// VOTING STAGES 2 & 3
+	// define variables for later use
+	candidate_vector::iterator it1, it2;
+	int low_votes = 0;
+	int max_votes = 0;
+	int stage;
+	for (stage = 2; stage <= 3; stage++)
 	{
-		for ( j = i+1; j < ImageStars.size(); j++ )
+		// only do this in stage 3. If you wanted to generalize this algorithm to larger data sets and more stages,
+		// you could do this in each stage with the subset of candidates deleted depending functionally on the stage 
+		if ( stage == 3 )
 		{
-			// iterate over all possible candidate pairs from the image pair
-			candidate_vector::iterator it1, it2;
-			for ( it1 = candidates_vec[i].begin(); it1 != candidates_vec[i].end(); it1++ ) // can we use < here instead of != ?
+			// for each image star, find the last candidate star leading it_stop with too few votes and erase that one and all that follow it
+			for ( i = 0; i < ImageStars.size(); i++ )
 			{
-				for ( it2 = candidates_vec[j].begin(); it2 != candidates_vec[j].end(); it2++ )
-				{
-					// generate the image pair index corresponding to i,j in the usual way (that being...?)
-					index_t pair_index = i*ImageStars.size() + j - (i+1)*(i+2)/2;
-					// compute cosine of the angle between the two candidate stars, for use in comparison (below)
-					sfloat dot = dot_product(CatalogStars[it1->first].r, CatalogStars[it2->first].r);
-					// just renaming lower and upper bounds on the image pair dot product range, for convenience
-					sfloat lower = ImagePairs[pair_index].lower;
-					sfloat upper = ImagePairs[pair_index].upper;
-					// see if the dot product is in the correct range
-					if ( dot >= lower && dot <= upper )
-					{
-						// if so, add votes to current candidates
-						it1->second += 1;
-						it2->second += 1;
-					}
-				}
+				// generate end iterator as before
+				candidate_vector::iterator it_stop = (	candidates_vec[i].size() > NUM_PARTIAL_SORT ?
+					candidates_vec[i].begin()+NUM_PARTIAL_SORT : candidates_vec[i].end() );
+
+				// iterate until either it_stop, or there are too many image stars and we find one with < low_votes, or there are not enough image stars and we find one with 0 votes
+				candidate_vector::iterator it;
+				for (	it = candidates_vec[i].begin();
+						it != it_stop && (	( ImageStars.size() >= IMAGE_STARS_USE_MAX_CUTOFF && it->second >= low_votes ) ||
+											( ImageStars.size() < IMAGE_STARS_USE_MAX_CUTOFF && it->second > 0 ) );
+						it++ );
+				
+				// throw away all candidates for the image star starting with the one just found and including all with fewer votes
+				candidates_vec[i].erase(it, candidates_vec[i].end());
+
+				// reset all votes to 0 for stage 3 voting
+				for ( it = candidates_vec[i].begin(); it != candidates_vec[i].end(); it++ )
+					it->second = 0;
 			}
 		}
-	}
 
-	//low_votes = int(0.8f*low_votes);
-
-	// find the highest number of votes out of all candidate stars for all image stars, put it in max_votes
-	int max_votes = 0;
-	for ( i = 0; i < ImageStars.size(); i++ )
-	{
-		// generate end iterator like before
-		candidate_vector::iterator it_stop = (	candidates_vec[i].size() > NUM_PARTIAL_SORT ?
-												candidates_vec[i].begin()+NUM_PARTIAL_SORT : candidates_vec[i].end() );
-
-		// partial/quick sort like before
-		partial_sort( candidates_vec[i].begin(), it_stop, candidates_vec[i].end(), compare_vector );
-		
-		// if first iterator is different from end iterator, and its vote count is higher, update max_votes with its value
-		candidate_vector::iterator it = candidates_vec[i].begin();
-		if ( it != it_stop && it->second > max_votes )
-			max_votes = it->second;
-	}
-	
-	// define this vote bound for later use
-	int low_votes = int( MAX_VOTES_COEFF * max_votes );
-
-
-	// VOTING STAGE 3
-
-	// legacy conditional statement determining whether to perform stage 3, apparently didn't work as desired
-	//if ( max_votes <= 4 )
-	if ( true ) 
-	{
-		// legacy debug printout
-		//debug_printf("Low votes detected, doing another stage\n");
-
-		// for each image star, find the last candidate star leading it_stop with too few votes and erase that one and all that follow it
-		for ( i = 0; i < ImageStars.size(); i++ )
-		{
-			// generate end iterator as before
-			candidate_vector::iterator it_stop = (	candidates_vec[i].size() > NUM_PARTIAL_SORT ?
-				candidates_vec[i].begin()+NUM_PARTIAL_SORT : candidates_vec[i].end() );
-
-			// iterate until either it_stop, or there are too many image stars and we find one with < low_votes, or there are not enough image stars and we find one with 0 votes
-			candidate_vector::iterator it;
-			for (	it = candidates_vec[i].begin();
-					it != it_stop && (	( ImageStars.size() >= IMAGE_STARS_USE_MAX_CUTOFF && it->second >= low_votes ) ||
-										( ImageStars.size() < IMAGE_STARS_USE_MAX_CUTOFF && it->second > 0 ) );
-					it++ );
-				
-			// throw away all candidates for the image star starting with the one just found and including all with fewer votes
-			candidates_vec[i].erase(it, candidates_vec[i].end());
-
-			// reset all votes to 0 for stage 3 voting
-			for ( it = candidates_vec[i].begin(); it != candidates_vec[i].end(); it++ )
-				it->second = 0;
-		}
-
-		// iterate over all image pairs i<j and add votes to candidates in the exact same way as in Stage 2
+		// iterate over distinct image star pairs i<j
 		for ( i = 0; i < ImageStars.size()-1; i++ )
 		{
 			for ( j = i+1; j < ImageStars.size(); j++ )
 			{
-				candidate_vector::iterator it1, it2;
+				// iterate over all possible candidate pairs from the image pair
 				for ( it1 = candidates_vec[i].begin(); it1 != candidates_vec[i].end(); it1++ )
 				{
 					for ( it2 = candidates_vec[j].begin(); it2 != candidates_vec[j].end(); it2++ )
 					{
-						index_t pair_index = i*ImageStars.size() + j - (i+1)*(i+2)/2;
+						// generate the image pair index corresponding to i,j. the equation comes from the fact that the pairs 
+						// are those in the upper triangle of the ij matrix (i<j) written one after the other, so we take take the
+						// linearized ij index and subtract off the positions skipped in the lower triangle.
+						// I may be wrong, but there seems to have been a bug here. was using (i+1)(i+2)/2 instead of i*(i+1)/2.
+						index_t pair_index = i*ImageStars.size() + j - i*(i+1)/2; 
+						// compute cosine of the angle between the two candidate stars, for use in comparison (below)
 						sfloat dot = dot_product(CatalogStars[it1->first].r, CatalogStars[it2->first].r);
+						// just renaming lower and upper bounds on the image pair dot product range, for convenience
 						sfloat lower = ImagePairs[pair_index].lower;
 						sfloat upper = ImagePairs[pair_index].upper;
+						// see if the dot product is in the correct range
 						if ( dot >= lower && dot <= upper )
 						{
+							// if so, add votes to current candidates
 							it1->second += 1;
 							it2->second += 1;
 						}
@@ -327,26 +284,30 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 				}
 			}
 		}
-		
-		// again, find the highest number of votes out of all candidate stars for all image stars, put it in max_votes
+
+		// find the highest number of votes out of all candidate stars for all image stars, put it in max_votes
 		max_votes = 0;
 		for ( i = 0; i < ImageStars.size(); i++ )
 		{
-			candidate_vector::iterator it_mid = (	candidates_vec[i].size() > NUM_PARTIAL_SORT ?
-				candidates_vec[i].begin()+NUM_PARTIAL_SORT : candidates_vec[i].end() );
+			// generate end iterator like before
+			candidate_vector::iterator it_stop = (	candidates_vec[i].size() > NUM_PARTIAL_SORT ?
+													candidates_vec[i].begin()+NUM_PARTIAL_SORT : candidates_vec[i].end() );
 
-			partial_sort( candidates_vec[i].begin(), it_mid, candidates_vec[i].end(), compare_vector );
+			// partial/quick sort like before
+			partial_sort( candidates_vec[i].begin(), it_stop, candidates_vec[i].end(), compare_vector );
+		
+			// if first iterator is different from end iterator, and its vote count is higher, update max_votes with its value
 			candidate_vector::iterator it = candidates_vec[i].begin();
-
-			if ( it != it_mid && it->second >= max_votes )
+			if ( it != it_stop && it->second > max_votes )
 				max_votes = it->second;
 		}
+	
+		// vote bound for use in stage 3 and later
+		low_votes = int( MAX_VOTES_COEFF * max_votes );
+
+		debug_printf("Max Votes: %d | Low Votes: %d\n", max_votes, low_votes );
 	}
 
-	// updating vote bound with stage 3 data
-	low_votes = int( MAX_VOTES_COEFF * max_votes );
-
-	debug_printf("Max Votes: %d | Low Votes: %d\n", max_votes, low_votes );
 
 	// for each image star, 
 	// if there the highest vote count is too small, we don't have enough data so assign all image stars with invalid identities,
