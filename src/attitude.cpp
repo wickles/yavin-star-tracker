@@ -52,7 +52,9 @@ We determine the eigenvalue of N by solving its characteristic quartic a[4].
 
 R is the rotation matrix
 */
-double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, coordinates* CoordOut, sfloat RMat[3][3], double RQuat[4])
+
+double GetAttitude(	vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, 
+					coordinates* BoresightOut, coordinates* CoordOut, sfloat RMat[3][3], double RQuat[4])
 {
 	Timer timer;
 	timer.StartTimer();
@@ -136,7 +138,7 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 	double eValue = MAX(rr[0], MAX(rr[1], MAX(rr[2], rr[3])));
 
 	//subtract the largest eigenValue from the main diagonal of the N matrix
-	for (int i = 0; i < 4; i++)
+	for (i = 0; i < 4; i++)
 		N[i][i] -= eValue;
 
 	//compute the adjacent matrix co-factor of N
@@ -145,18 +147,18 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 
 	//compute the eigenVector of N from the adjacent matrix co-factor
 	double eVector[4] = {0, 0, 0, 0};
-	for (int i = 0; i < 4; i++)
-		for (int j = 0; j < 4; j++)
+	for ( i = 0; i < 4; i++ )
+		for ( j = 0; j < 4; j++ )
 			eVector[i] += Nco[i][j];
 
 	//fix the N matrix to how it was before
-	for (int i = 0; i < 4; i++)
+	for ( i = 0; i < 4; i++ )
 		N[i][i] += eValue;
 
 	//this fixes any floating-point errors in the eigenVector using a recursive method
 	eValue = reOrient(eVector, N);
 
-	for ( int i = 0; i < 4; i++ )
+	for ( i = 0; i < 4; i++ )
 		eigen_vector[i] = eVector[i];
 
 	//calculate the error from the eigenvalue
@@ -171,16 +173,18 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 	//compute the rotation matrix from the quaternion
 	GetMatrixFromQuat(R, eVector);
 
-	double rCenter[3];
+	double rCenter[3], rBoresightVector[3];
 	double Rt[3][3];
-	for (int i = 0; i < 3; i++)
-		for (int j = 0; j < 3; j++)
+	for ( i = 0; i < 3; i++ )
+		for ( j = 0; j < 3; j++ )
 			Rt[i][j] = R[j][i];						//compute the transpose of R, called Rt
 #ifdef WEIGH_STAR_ERROR	
 	WeighByError( ImageStars, CatalogStars, Rt, rCenter );
 #else
-	for ( int i = 0; i < 3; i++ )
+	for ( i = 0; i < 3; i++ )
 		rCenter[i] = R[0][i];						//compute the coordiantes of the center of the image
+	for ( i = 0; i < 3; i++ )
+		rBoresightVector[i] = R[1][i];				//the boresight vector is used to determine the boresight angle (rotation about the centeral axis).
 	for ( it = ImageStars.begin(); it != ImageStars.end(); it++ )
 		if (it->identity != INDEX_INVALID)
 			matrix_mult(Rt, it->r_prime, it->r);	//
@@ -193,10 +197,7 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 		tmpRA += 2 * M_PI;
 	tmpDec = atan( rCenter[2] / sqrt( SQUARE(rCenter[0]) + SQUARE(rCenter[1]) ) );
 
-	timer.StopTimer();
-
 	//print the RA and DEC.
-	debug_printf(	"Successfully estimated attitude. | Time elapsed: %d ms\n", timer.GetTime());
 	debug_printf(	"(RA,DEC) = (%.15f, %.15f)\n", tmpRA, tmpDec);
 	debug_printf(	"RA: %02d:%02d:%f DEC: %02d:%02d:%f\n",
 					int( tmpRA/(2*M_PI)*24 ), int( tmpRA/(2*M_PI)*24*60 ) % 60, fmod( tmpRA/(2*M_PI)*24*60*60, 60 ),
@@ -208,19 +209,35 @@ double GetAttitude(vector<image_star>& ImageStars, vector<catalog_star>& Catalog
 		CoordOut->DEC = (sfloat)tmpDec;
 	}
 
+	//compute the RA and DEC of the boresight vector
+	tmpRA = atan2( rBoresightVector[1], rBoresightVector[0] );
+	if ( tmpRA < 0 )
+		tmpRA += 2 * M_PI;
+	tmpDec = atan( rBoresightVector[2] / sqrt( SQUARE(rBoresightVector[0]) + SQUARE(rBoresightVector[1]) ) );
+
+	if ( BoresightOut != NULL )
+	{
+		BoresightOut->RA = (sfloat)tmpRA;
+		BoresightOut->DEC = (sfloat)tmpDec;
+	}
+
 	if ( RMat != NULL )
 	{
 		//print the R matrix
-		for (int i = 0; i < 3; i++)
-			for (int j = 0; j < 3; j++)
+		for ( i = 0; i < 3; i++ )
+			for ( j = 0; j < 3; j++ )
 				RMat[i][j] = (sfloat)R[i][j];
 	}
 
 	if ( RQuat != NULL )
 	{
-		for (int i = 0; i < 3; i++)
+		for ( i = 0; i < 3; i++ )
 			RQuat[i] = eVector[i];
 	}
+
+	timer.StopTimer();
+
+	debug_printf(	"Successfully estimated attitude. | Time elapsed: %d ms\n", timer.GetTime());
 
 	return rms_error;
 }

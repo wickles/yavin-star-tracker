@@ -1,5 +1,7 @@
 #include <ctime>
 
+#pragma once
+
 class Timer {
 	clock_t start_time;
 	clock_t end_time;

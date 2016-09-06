@@ -70,6 +70,9 @@ coordinates Image_Coords = {0, 0};
 //Azi, Ele of image
 double Image_Azi = 0.0;
 double Image_Ele = 0.0;
+double Image_Bore = 0.0;
+double Image_LST = 0.0;
+double Image_HA = 0.0;
 int Ele_Corr = 0;
 int num_detected = 0;
 // Local time of image
@@ -223,6 +226,40 @@ int CameraLoadSettings( const char* filename )
 	return 1;
 }
 
+#ifdef SDL_ENABLED
+
+SDL_Surface* CCD_surface = NULL;
+SDL_Surface* screen = NULL;
+TTF_Font* font = NULL;
+int yText = 0;
+
+void GUISetCursor( int y )
+{
+	yText = y;
+}
+
+void GUIFlipScreen()
+{
+	SDL_BlitSurface( CCD_surface, NULL, screen, NULL );
+	GUISetCursor(0);
+}
+
+void GUIPrintText( const char* txt, ... )
+{
+	char buffer[4*1024];
+    va_list argptr;
+    va_start(argptr, txt);
+    vsnprintf(buffer, 4*1024, txt, argptr);
+
+	DrawSDLText( font, screen, 0, yText, buffer );
+    
+	va_end(argptr);
+
+	yText += FONT_SIZE;
+}
+
+#endif
+
 // Callback function for handling 
 void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 {
@@ -344,10 +381,10 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 					// enough stars, continue with identification
 					IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
 
-					coordinates Coords;
+					coordinates Coords, BoresightCoords;
 					sfloat R[3][3];
 					sfloat RQuat[4];
-					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &Coords, R, RQuat);
+					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat);
 					Image_Correct_ID = ( rms_error <= 0.01 );
 
 					if ( Image_Correct_ID )
@@ -365,12 +402,17 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 						double LAT = Settings.Latitude * M_PI / 180;
 						double LONG = Settings.Longitude * M_PI / 180;
 						//printf("Julian: %f\n", JDN);
-						double LST, HA;
-						LST = getLST( LONG, JDN );
-						HA = getHA1( LST, Coords.RA );
-						Image_Azi = getAzi( HA, LAT, Coords.DEC );
-						Image_Ele = getEle( HA, LAT, Coords.DEC );
+						Image_LST = getLST( LONG, JDN );
+						Image_HA = getHA1( Image_LST, Coords.RA );
+						Image_Azi = getAzi( Image_HA, LAT, Coords.DEC );
+						Image_Ele = getEle( Image_HA, LAT, Coords.DEC );
 						//Ele_Corr = correctEle( );
+
+						//find the Boresight Angle from BoresightCoords
+						double HA, AZI;
+						HA = getHA1( Image_LST, BoresightCoords.RA );
+						AZI = getAzi( HA, Settings.Latitude, BoresightCoords.DEC );
+						Image_Bore = acos ( cos(Image_Azi) * sin(AZI) - sin(Image_Azi) * cos(AZI) );
 
 						int i, j;
 						for ( i = 0; i < 3; i++ )
@@ -446,15 +488,18 @@ void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
 											*/
 		// RA = hour.6, DEC = deg.4, AZI,ELE = deg.4
 		if ( Image_Correct_ID )
-			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | EleCorr: %d | Stars: %d | Mean: %.1f\n",
-					Settings.Latitude, Settings.Longitude, Settings.Altitude,
+			printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Boresight: %.4f | Stars: %d | Mean: %.1f\n"
+					"EleCorr: %d | LST: %f | HA: %f | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f\n",
 					Image_Coords.RA*12/M_PI, Image_Coords.DEC*180/M_PI,
-					Image_Azi*180/M_PI, Image_Ele*180/M_PI,
-					Ele_Corr, num_detected, Mean_Sky_Level );
+					Image_Azi*180/M_PI, Image_Ele*180/M_PI, Image_Bore*180/M_PI,
+					num_detected, Mean_Sky_Level,
+					Ele_Corr, Image_LST, Image_HA,
+					Settings.Latitude, Settings.Longitude, Settings.Altitude );
 		else
-			printf( "(LAT,LONG) = (%.4f,%.4f) | ALT = %.1f | (RA, DEC) = ERR | (AZI, ELE) = ERR | EleCorr: ERR | Stars: %d | Mean: %.1f\n",
-					Settings.Latitude, Settings.Longitude, Settings.Altitude,
-					num_detected, Mean_Sky_Level );
+			printf( "(RA, DEC) = ERR | (AZI, ELE) = ERR | Boresight: ERR | Stars: %d | Mean: %.1f\n"
+					"EleCorr: ERR | LST: ERR | HA: ERR | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f\n",
+					num_detected, Mean_Sky_Level,
+					Settings.Latitude, Settings.Longitude, Settings.Altitude );
 #endif
 	}
 }
@@ -561,17 +606,17 @@ int main(int argc, char* argv[])
 	// Initialize SDL
 	ret = SDL_Init( SDL_INIT_VIDEO );
 	printf( "SDL_Init returns %d\n", ret );
-	SDL_Surface* screen = SDL_SetVideoMode( Settings.ImageWidth, Settings.ImageHeight, 32, SDL_HWSURFACE | SDL_DOUBLEBUF );
+	screen = SDL_SetVideoMode( Settings.ImageWidth, Settings.ImageHeight, 32, SDL_HWSURFACE | SDL_DOUBLEBUF );
 	SDL_WM_SetCaption( "CCD Camera", NULL );
 	SDL_Event event;
 
 	ret = TTF_Init();
 	printf( "TTF_Init returned %d\n", ret );
-	TTF_Font* font = TTF_OpenFont( "consola.ttf", FONT_SIZE );
+	font = TTF_OpenFont( "consola.ttf", FONT_SIZE );
 	//printf("Font at 0x%08X\n", (unsigned int)font);
 
 	int bytes_pp = (Settings.BitMode == 12 ? 2 : 1);
-	SDL_Surface* CCD_surface = SDL_CreateRGBSurfaceFrom( pixel_data, Settings.ImageWidth, Settings.ImageHeight,
+	CCD_surface = SDL_CreateRGBSurfaceFrom( pixel_data, Settings.ImageWidth, Settings.ImageHeight,
 													bytes_pp*8, Settings.ImageWidth*bytes_pp,
 													0x0ff0, 0x0ff0, 0x0ff0, 0);
 	//printf( "CCD_surface at 0x%08X\n", (unsigned int)CCD_surface );
@@ -674,63 +719,52 @@ int main(int argc, char* argv[])
 	{
 		// Handle SDL drawing
 #ifdef SDL_ENABLED
-		// TODO: Write better interface for SDL text...
-		SDL_BlitSurface( CCD_surface, NULL, screen, NULL );
-		int yText = 0;
-		DrawSDLText( font, screen, 0, yText, "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
+		/*
+		
+			printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Stars: %d | Mean: %.1f\n"
+					"EleCorr: %d | LST: %f | HA: %f | (LAT,LONG) = (%.4f,%.4f) | ALT = %.1f\n",
+					*/
+		GUIFlipScreen();
+		GUIPrintText( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
 											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
-		yText += FONT_SIZE;
-		DrawSDLText( font, screen, 0, yText, "Mean Sky Level: %.1f", Mean_Sky_Level );
-		yText += FONT_SIZE;
-		DrawSDLText( font, screen, 0, yText, "Stars Detected: %d", num_detected );
-		yText += FONT_SIZE;
-		DrawSDLText( font, screen, 0, yText, "Latitude:  %.4f", Settings.Latitude );
-		yText += FONT_SIZE;
-		DrawSDLText( font, screen, 0, yText, "Longitude: %.4f", Settings.Longitude );
-		yText += FONT_SIZE;
-		DrawSDLText( font, screen, 0, yText, "Altitude:  %.1f", Settings.Altitude );
-		yText += FONT_SIZE;
+		GUIPrintText( "Mean Sky Level: %.1f", Mean_Sky_Level );
+		GUIPrintText( "Stars Detected: %d", num_detected );
+		GUIPrintText( "Latitude:  %.4f", Settings.Latitude );
+		GUIPrintText( "Longitude: %.4f", Settings.Longitude );
+		GUIPrintText( "Altitude:  %.1f", Settings.Altitude );
 		if ( Image_Correct_ID )
 		{
-			DrawSDLText( font, screen, 0, yText, "RA: %.6f", Image_Coords.RA*12/M_PI );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "DEC: %.4f", Image_Coords.DEC*180/M_PI );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "AZI: %.4f", Image_Azi*180/M_PI );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "ELE: %.4f", Image_Ele*180/M_PI );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "Ele Corr: %d", Ele_Corr );
-			yText += FONT_SIZE;
+			GUIPrintText( "Ele Corr: %d", Ele_Corr );
+			GUIPrintText( "Boresight: %.4f", Image_Bore*180/M_PI );
+			GUIPrintText( "AZI: %.4f", Image_Azi*180/M_PI );
+			GUIPrintText( "ELE: %.4f", Image_Ele*180/M_PI );
+			GUIPrintText( "RA: %.6f", Image_Coords.RA*12/M_PI );
+			GUIPrintText( "DEC: %.4f", Image_Coords.DEC*180/M_PI );
 		}
 		else
 		{
-			DrawSDLText( font, screen, 0, yText, "RA:  ERR" );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "DEC: ERR" );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "AZI: ERR" );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "ELE: ERR" );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "Ele Corr: ERR" );
-			yText += FONT_SIZE;
+			GUIPrintText( "Ele Corr: ERR" );
+			GUIPrintText( "Boresight: ERR" );
+			GUIPrintText( "AZI: ERR" );
+			GUIPrintText( "ELE: ERR" );
+			GUIPrintText( "RA:  ERR" );
+			GUIPrintText( "DEC: ERR" );
 		}
-		DrawSDLText( font, screen, 0, yText, "Mouse: (%d,%d)", mouse_x, mouse_y );
-		yText += FONT_SIZE;
+		GUIPrintText( "" );
+		GUIPrintText( "Mouse: (%d,%d)", mouse_x, mouse_y );
 		if ( Image_Correct_ID )
 		{
-			DrawSDLText( font, screen, 0, yText, "MouseRA:  %.6f", MouseCoords.RA*12/M_PI );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "MouseDEC: %.4f", MouseCoords.DEC*180/M_PI );
-			yText += FONT_SIZE;
+			GUIPrintText( "MouseAZI: %.4f", 0.0 );
+			GUIPrintText( "MouseELE: %.4f", 0.0 );
+			GUIPrintText( "MouseRA:  %.6f", MouseCoords.RA*12/M_PI );
+			GUIPrintText( "MouseDEC: %.4f", MouseCoords.DEC*180/M_PI );
 		}
 		else
 		{
-			DrawSDLText( font, screen, 0, yText, "MouseRA:  ERR" );
-			yText += FONT_SIZE;
-			DrawSDLText( font, screen, 0, yText, "MouseDEC: ERR" );
-			yText += FONT_SIZE;
+			GUIPrintText( "MouseAZI: ERR" );
+			GUIPrintText( "MouseELE: ERR" );
+			GUIPrintText( "MouseRA:  ERR" );
+			GUIPrintText( "MouseDEC: ERR" );
 		}
 		SDL_Flip(screen);
 		// Handle SDL events
