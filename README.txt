@@ -1,6 +1,12 @@
-Authors: Gil Tabak, Alex Wickes, Karanbir Toor.
-
 This program encompasses the latest working version of our static Star Tracker. Here, we summarize the directions for its application.
+Originally developed at the University of California, Santa Barbara, by Gil Tabak, Alexander Wickes, and Karanbir Toor, under the
+supervision of professor Philip Lubin. We thank our associate Gary Hughes for useful discussions. This work is supported in part by
+the NASA California Space Grant and by the Institute for Terahertz Science and Technology (ITST) at UC Santa Barbara.
+
+The program was designed and tested with a Mightex CCD camera (model CGE-B013-U) and the Mightex SDK, but could be extended
+to work with other CCD cameras. Captured images are processed for detection of possible star candidates. The star candidates
+are then fed to a geometric voting algorithm that attempts to identify them. Finally a quaternion-based least-squares fitting
+method determines the celestial coordinates of the image center.
 
 Before running the code, you might want to look at the settings file, which controls various options. 
 This includes how to use the program to read/write the images used.
@@ -164,3 +170,7 @@ These files take in identified image stars and return the attitude of the camera
 Atmosphere.h and Atmosphere.cpp
 These files TODO.
 
+////////////////////////////////////////////////////////////////////////
+
+TODO:
+- Compute mean for dark and image, scale dark accordingly.

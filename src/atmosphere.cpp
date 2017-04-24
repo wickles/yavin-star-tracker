@@ -1,3 +1,12 @@
+/**
+* This work belongs to the Star Tracker project at UCSB.
+* Copyright 2010 Alexander Wickes
+* Copyright 2010 Gil Tabak
+* Copyright 2012 Karanbir Toor
+* This work is licensed under the Apache License Version 2.0,
+* subject to all terms as reproduced in the included LICENSE file.
+*/
+
 /* Atmospheric_Correction.cpp
 Gil Tabak 2/17/2011
 This file uses the system time (to be replaced with GPS time) and the lattitude and longitude 

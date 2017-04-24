@@ -1,22 +1,11 @@
-/* Star_Tracker.cpp
- Star Tracker by Alexander Wickes and Gil Tabak
- September 20, 2010
- 
- This program connects to a Mightex CCD Camera, model CGE-B013-U, in order to capture
- images. These images are processed (see detector.cpp) in order to detect possible
- stars and acquire their local spherical coordinates, in the image's reference frame.
- A star catalog is pre-loaded (see catalog.cpp) and a geometric voting algorithm is
- used to identify the image stars (see identifier.cpp). We then use a quaternion-based
- least squares regression method to find the coordinates of the center of the image
- (see attitude.cpp).
- 
- Settings are loaded from settings.txt. SDL (Simple DirectMedia Layer) is used for the
- GUI. 
- */
-
-/* TODO
- - Compute mean for dark and image, scale dark accordingly.
- */
+/**
+* This work belongs to the Star Tracker project at UCSB.
+* Copyright 2010 Alexander Wickes
+* Copyright 2010 Gil Tabak
+* Copyright 2012 Karanbir Toor
+* This work is licensed under the Apache License Version 2.0,
+* subject to all terms as reproduced in the included LICENSE file.
+*/
 
 #include "stdafx.h"
 
