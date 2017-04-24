@@ -22,10 +22,15 @@
 #define LOCAL_WIDTH			64
 #define LOCAL_HEIGHT		64
 #define LOCAL_SAMPLE_SKIP	4
-#define STAR_MIN_OUTSTND	4
+#define STAR_MIN_OUTSTND	6
 #define STAR_MAX_OUTSTND	100
 
-#define MAX_IMAGE_STARS		20
+// #define MAX_IMAGE_STARS		20
+// don't think Alex used the one above at all. Erase if not needed.
+
+//#define TIMERS_ON
+
+
 #define DOUBLE_STAR_PIXEL_RADIUS	10
 #define IMAGE_STARS_USE_MAX_CUTOFF	15
 
@@ -55,6 +60,14 @@ typedef
 
 typedef short index_t;
 
+//used for centroiding
+struct cart_coords {
+	short x, y;
+	sfloat value;
+	bool operator<(const cart_coords& a) const{
+		return value < a.value;}
+}; 
+
 struct catalog_star {
 	sfloat RA, Dec;
 	float app_mag;
@@ -69,11 +82,18 @@ struct catalog_pair {
 
 struct image_star {
 	sfloat centroid_x, centroid_y;
+	sfloat signal;
 	sfloat r_prime[3];
 	sfloat r[3];
 	sfloat error;
 	sfloat radius;
 	index_t identity;
+	int num_pixels;
+	//we compare two stars by their signal.
+	bool operator<(const image_star& a) const{
+		return signal < a.signal;}
+		//return signal/num_pixels < a.signal/a.num_pixels;}
+		//TODO: test both, compare.
 };
 
 struct image_pair {
@@ -96,6 +116,7 @@ struct prior_s {
 	coordinates coords;
 	sfloat phi_max;
 	unsigned int tickCount;
+	float focal_length;
 };
 
 #ifndef DEBUG_TEXT

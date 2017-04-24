@@ -54,7 +54,7 @@ R is the rotation matrix
 */
 
 double GetAttitude(	vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, 
-					coordinates* BoresightOut, coordinates* CoordOut, sfloat RMat[3][3], double RQuat[4])
+					coordinates* BoresightOut, coordinates* CoordOut, sfloat RMat[3][3], double RQuat[4], double &err)
 {
 	Timer timer;
 	timer.StartTimer();
@@ -235,12 +235,59 @@ double GetAttitude(	vector<image_star>& ImageStars, vector<catalog_star>& Catalo
 			RQuat[i] = eVector[i];
 	}
 
+	//compute error for focal length stuff
+	err = 0;
+	for ( it = ImageStars.begin(); it != ImageStars.end(); it++ )					//iterate over image stars
+	{
+		double r_tmp [3];
+		double tmp_dot;
+		if ( it->identity != INDEX_INVALID && it->identity != INDEX_FALSE_STAR )	//valid star
+		{
+			tmp_dot = 0;
+			for (int k = 0; k < 3; k++)
+				r_tmp [k] = 0;
+			for (int i = 0; i < 3; i++ )	
+				for (int j = 0; j < 3; j ++ )
+					r_tmp[i] += R[i][j] * CatalogStars[it->identity].r[j];
+
+				//print out x-spherical coordinate of image star and its catalog match in the image frame
+				// for (int j = 0; j < 3; j++ )
+				//	printf("r' = %f, r_tmp = %f\n", it->r_prime[0], r_tmp[0]);
+			for (int j = 0; j < 3; j++ ){
+				tmp_dot += (it->r_prime[j] * r_tmp[j]);
+			}
+			err += acos(tmp_dot);
+		}
+	}
+	err /= ImageStars.size();
+
 	timer.StopTimer();
 
 	debug_printf(	"Successfully estimated attitude. | Time elapsed: %d ms\n", timer.GetTime());
 
 	return rms_error;
 }
+
+/*
+double GetError( vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, sfloat R[3][3] ){
+	vector<image_star>::iterator it;
+	for ( it = ImageStars.begin(); it != ImageStars.end(); it++ )					//iterate over image stars
+	{
+		double r_tmp [3];
+		if ( it->identity != INDEX_INVALID && it->identity != INDEX_FALSE_STAR )	//valid star
+		{
+			for (int k = 0; k < 3; k++)
+				r_tmp [k] = 0;
+			for (int i = 0; i < 3; i++ )	
+				for (int j = 0; j < 3; j ++ )
+					r_tmp[i] += R[i][j] * CatalogStars[it->identity].r[j];
+				for (int j = 0; j < 3; j++ ){
+					printf("%f %f", it->r_prime[0], r_tmp[0]);
+			}
+		}
+	}
+		return 0;
+}*/  
 
 //used by quart
 void quadra(double a1, double a2, double a3, double *rr1, double *rr2, double *ri1, double *ri2)

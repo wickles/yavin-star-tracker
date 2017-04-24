@@ -8,17 +8,13 @@ September 20, 2010
 #include <algorithm>
 #include "timer.h"
 
-#define NUM_CANDIDATES 5
-#define NUM_PARTIAL_SORT 20
+#define NUM_CANDIDATES		5		//
+#define NUM_PARTIAL_SORT	20		//max number of candidates, modulo a tie in votes
+#define NUM_TO_USE			15		//number of image stars to use
 
 using namespace std;
 
 typedef unsigned int vote_t;
-
-static bool compare_catalog(catalog_pair first, catalog_pair second)
-{
-	return (first.distance < second.distance);
-}
 
 /*	Map to keep track of votes for candidates stars for a given image star. Key is the index of the candidate catalog star,
 	value is number of votes for the candidate star. Candidates not found in map are added with 1 vote, those found have their
@@ -30,6 +26,13 @@ typedef hash_map<index_t, vote_t> candidate_map;
 typedef pair<index_t, vote_t> candidate_t;
 // define a data type for vectors of candidates, for convenience
 typedef vector<candidate_t> candidate_vector;
+// Global vector of image pairs, to avoid allocating memory repeatedly
+vector<image_pair> ImagePairs;
+
+static bool compare_catalog(catalog_pair first, catalog_pair second)
+{
+	return (first.distance < second.distance);
+}
 
 static bool compare_map( candidate_map::value_type& left, candidate_map::value_type& right)
 {
@@ -60,34 +63,36 @@ static inline void add_votes(candidate_map* StarCand, index_t img_star1, index_t
 	add_votes_helper(StarCand, img_star2, ctg_star2);
 }
 
-// Global vector of image pairs, to avoid allocating memory repeatedly
-vector<image_pair> ImagePairs;
+static inline void PurgeImageStars(vector<image_star>& ImageStars){
+	//if the number of ImageStars is less then or equal to the given number, do nothing
+    if (ImageStars.size() <= NUM_TO_USE)
+        return;
+    //sort the image stars by error (use reverse iterators to obtain descending order)
+    sort(ImageStars.rbegin(), ImageStars.rend() );
+   
+    ImageStars.erase (ImageStars.begin()+NUM_TO_USE,ImageStars.end() );
+}
 
 // fills the ImagePairs vector with image_pair structs constructed from the image stars
-void GetImagePairs(vector<image_star>& ImageStars)
-{
+void GetImagePairs(vector<image_star>& ImageStars){
+
 	ImagePairs.clear();
 
 	//vector<image_pair> ImagePairs;
 	ImagePairs.reserve( ImageStars.size() * (ImageStars.size()-1) / 2 );
 
-
-	int i, j;
 	// Iterate over all distinct pairs of image stars
-	for ( i = 0; i < ImageStars.size()-1; i++ )
+	for (int i = 0; i < ImageStars.size()-1; i++ )
 	{
-		for ( j = i+1; j < ImageStars.size(); j++ )
+		for (int j = i+1; j < ImageStars.size(); j++ )
 		{
 			sfloat ang_dist = acos( dot_product(ImageStars[i].r_prime, ImageStars[j].r_prime) );
-			// Error is sum of errors for both stars
+			// Use sum of errors to make sure we include all stars within range.
 			sfloat error = ImageStars[i].error + ImageStars[j].error;
-			//error *= .5f;
-
 			image_pair pair = { i, j, cos(ang_dist + error), cos(ang_dist - error) };
 			ImagePairs.push_back(pair);
 		}
 	}
-
 	//return ImagePairs;
 }
 
@@ -96,19 +101,31 @@ void GetImagePairs(vector<image_star>& ImageStars)
 //#define DEBUG_IDENTIFY_METHOD
 
 // takes a vector of image stars, a catalog, and a prior (stores information about previously acquired attitude)
-void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, prior_s* Prior)
-{
+void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, prior_s* Prior){
+
 	// declare and start a timer for measuring execution speed
 	Timer timer;
 	timer.StartTimer();
+
+	// restrict the number of stars used. Ordered based on signal (can modify in star.h)
+	PurgeImageStars(ImageStars);
 
 	// create local references to the catalog stars vector and catalog pairs vector. this is purely for convenience.
 	vector<catalog_star>& CatalogStars = theCatalog.Stars;
 	vector<catalog_pair>& CatalogPairs = theCatalog.SortedPairs;
 
 	// requests that the vector capacity be enough to contain n=1000 elements
-	ImagePairs.reserve( 1000 );
 	GetImagePairs( ImageStars );
+
+	// create a new array of candidate hash maps for each candidate star
+	candidate_map* StarCandidates = new candidate_map[ImageStars.size()];
+
+	debug_printf("Identifying stars...\n");
+
+
+	// INITIAL VOTING STAGE: Populating votes
+	// for each image pair, go through range of possible catalog pairs. for each catalog pair with both stars in range of
+	// prior (or without a prior), add a vote for catalog stars to each image star in image pair
 
 	// if prior data is valid, construct the prior vector and compute the cosine of phi_max for later use
 	sfloat rPrior[3];
@@ -121,15 +138,6 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 		prior_dot = cos(Prior->phi_max);
 	}
 
-	// create a new array of candidate hash maps for each candidate star
-	candidate_map* StarCandidates = new candidate_map[ImageStars.size()];
-
-	debug_printf("Identifying stars...\n");
-
-
-	// INITIAL VOTING STAGE
-	// for each image pair, go through range of possible catalog pairs. for each catalog pair with both stars in range of
-	// prior (or without a prior), add a vote for catalog stars to each image star in image pair
 	vector<image_pair>::iterator it;
 	for ( it = ImagePairs.begin(); it != ImagePairs.end(); it++ )
 	{
@@ -175,10 +183,11 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 	// print out time taken up to populating votes in initial voting stage
 	debug_printf( "Successfully populated candidate stuff, time: %d ms\n", timer.GetTime() );
 
+	//////////////////////////////////////////////////////////////////////////////////////////////////////
+	// INITIAL VOTING STAGE: 
 	// create another timer for timing 
 	Timer timer2;
 	timer2.StartTimer();
-
 
 	// create candidate_vector (vector of candidate_t objects) for each image star, to be used for NEXT voting stage
 	candidate_vector* candidates_vec = new candidate_vector[ImageStars.size()];
@@ -267,7 +276,8 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 						// are those in the upper triangle of the ij matrix (i<j) written one after the other, so we take take the
 						// linearized ij index and subtract off the positions skipped in the lower triangle.
 						// I may be wrong, but there seems to have been a bug here. was using (i+1)(i+2)/2 instead of i*(i+1)/2.
-						index_t pair_index = i*ImageStars.size() + j - i*(i+1)/2; 
+						// Gil: new values did not seem to work. Changed back to old values.
+						index_t pair_index = i*ImageStars.size() + j - (i+1)*(i+2)/2; 
 						// compute cosine of the angle between the two candidate stars, for use in comparison (below)
 						sfloat dot = dot_product(CatalogStars[it1->first].r, CatalogStars[it2->first].r);
 						// just renaming lower and upper bounds on the image pair dot product range, for convenience
@@ -336,12 +346,13 @@ void IdentifyImageStars(vector<image_star>& ImageStars, Catalog& theCatalog, pri
 	// clean up data structures. this is probably inefficient and could/should be optimized!
 	delete[] candidates_vec;
 	delete[] StarCandidates;
-
+	
+#ifdef TIMERS_ON
 	// stop both timers
 	timer2.StopTimer();
 	timer.StopTimer();
-
-	debug_printf("Successfully identified stars. | Time elapsed: %d ms | Total Time: %d ms\n", timer2.GetTime(), timer.GetTime());
+	printf("Successfully identified stars. | Time for ID algorithm: %d ms | Total Time for ID method: %d ms\n", timer2.GetTime(), timer.GetTime());
+#endif
 #ifdef PROMPT_USER
 	printf("Press ENTER to continue.\n");
 	getchar();

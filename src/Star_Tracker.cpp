@@ -1,28 +1,29 @@
 /* Star_Tracker.cpp
-Star Tracker by Alexander Wickes and Gil Tabak
-September 20, 2010
-
-This program connects to a Mightex CCD Camera, model CGE-B013-U, in order to capture
-images. These images are processed (see detector.cpp) in order to detect possible
-stars and acquire their local spherical coordinates, in the image's reference frame.
-A star catalog is pre-loaded (see catalog.cpp) and a geometric voting algorithm is
-used to identify the image stars (see identifier.cpp). We then use a quaternion-based
-least squares regression method to find the coordinates of the center of the image
-(see attitude.cpp).
-
-Settings are loaded from settings.txt. SDL (Simple DirectMedia Layer) is used for the
-GUI. 
-*/
+ Star Tracker by Alexander Wickes and Gil Tabak
+ September 20, 2010
+ 
+ This program connects to a Mightex CCD Camera, model CGE-B013-U, in order to capture
+ images. These images are processed (see detector.cpp) in order to detect possible
+ stars and acquire their local spherical coordinates, in the image's reference frame.
+ A star catalog is pre-loaded (see catalog.cpp) and a geometric voting algorithm is
+ used to identify the image stars (see identifier.cpp). We then use a quaternion-based
+ least squares regression method to find the coordinates of the center of the image
+ (see attitude.cpp).
+ 
+ Settings are loaded from settings.txt. SDL (Simple DirectMedia Layer) is used for the
+ GUI. 
+ */
 
 /* TODO
-	- Compute mean for dark and image, scale dark accordingly.
-	*/
+ - Compute mean for dark and image, scale dark accordingly.
+ */
 
 #include "stdafx.h"
 
 #include <cstdio>
 #include <cstdarg>
 #include <direct.h>
+#include <cmath>
 #include "ini_reader.h"
 #include "detector.h"
 #include "catalog.h"
@@ -30,6 +31,12 @@ GUI.
 #include "attitude.h"
 #include "timer.h"
 #include "atmosphere.h"
+#include "star.h"
+#include "fitsio.h"
+
+#include <fstream>
+#include <string>
+#include <vector>
 
 using namespace std;
 
@@ -46,50 +53,64 @@ using namespace std;
 
 #define FONT_SIZE 16
 
-//#define PROCESS_IMAGE
+	//#define PROCESS_IMAGE
 
 const char* settings_file = "settings.txt";
 bool fault = false;
 
-// Static framebuffer for storing camera image
+	// globals for reading from a directory
+string line;
+vector<string> names;
+const char* namesFile = "names.txt";
+char namesFileDir[100];	// set at runtime
+int namesIterator = 0;
+
+	// Static framebuffer for storing camera image
 void* pixel_data = NULL;
 
-// Global catalog structure, so it can be allocated in main and used in callback
+	// Global catalog structure, so it can be allocated in main and used in callback
 Catalog glCatalog;
 
-// Global vector for image stars, to be used repeatedly (avoid constant memory allocation)
+	// Global vector for image stars, to be used repeatedly (avoid constant memory allocation)
 vector<image_star> ImageStars;
 
-// Global variables, modified in callback and viewed in main
-// Transpose (inverse) of rotation matrix
+	// Global variables, modified in callback and viewed in main
+	// Transpose (inverse) of rotation matrix
 double Image_Rt[3][3] = {	{ 1, 0, 0 },
-							{ 0, 1, 0 },
-							{ 0, 0, 1 } };
-// RA,DEC of image
+	{ 0, 1, 0 },
+	{ 0, 0, 1 } };
+	// RA,DEC of image
 coordinates Image_Coords = {0, 0};
-//Azi, Ele of image
+	//Azi, Ele of image
 double Image_Azi = 0.0;
 double Image_Ele = 0.0;
 double Image_Bore = 0.0;
 double Image_LST = 0.0;
 double Image_HA = 0.0;
+
+// used for focal length adjustment in CaliMode
+double running_foc = 0;
+int num_im_cali = 0;
+
 int Ele_Corr = 0;
 int num_detected = 0;
-// Local time of image
+	// Local time of image
 SYSTEMTIME Image_LocalTime;
-// Whether attitude was correctly determined
+	// Whether attitude was correctly determined
 bool Image_Correct_ID = false;
-// Mean Sky Level
+	// Mean Sky Level
 float Mean_Sky_Level = 0.0f;
-// Whether there is a valid prior for use when identifying stars in new image
+	// Whether there is a valid prior for use when identifying stars in new image
 bool Prior_Valid = false;
-// Contains coords of a previous image to make it easier to identify another image
+	// Contains coords of a previous image to make it easier to identify another image
 prior_s Prior;
 
 char dir_name[512];
+char fits_dir_name[512];
 char output_name[512];
+char output_foc[512];
 
-// Global structure for the dark image, which is an image taken by the camera without the lens on to be subtracted from actual images
+	// Global structure for the dark image, which is an image taken by the camera without the lens on to be subtracted from actual images
 image_s DarkImage = {
 	0,
 	0,
@@ -97,10 +118,10 @@ image_s DarkImage = {
 	NULL
 };
 
-// Settings loaded from file about how the program should run
+	// Settings loaded from file about how the program should run
 struct settings_s {
 	bool TriggerMode;
-	bool DumpImages;
+	bool DumpRaws;
 	bool DumpData;
 	bool ProcessImages;
 	float FocalLength;
@@ -117,9 +138,21 @@ struct settings_s {
 	float Latitude;		// Degrees
 	float Longitude;	// 
 	float Altitude;		// meters
+	bool ReadRaw;
+	bool ReadFits;
+	bool DumpFits;
+	bool CaliMode;		// Auto-calibration. adjusts focal length.
+	int CaliTries;
+	float FocalError;
+	float PriorRA;		// used as prior when CaliMode is on
+	float PriorDEC;
+	float PriorError;
+	float OutRad;
+	float InRad;
+	bool LostInSpace;
 } Settings;
 
-// CCD Camera settings
+	// CCD Camera settings
 struct camera_s {
 	int DeviceID;
 	char ModuleNo[32];
@@ -131,7 +164,7 @@ struct camera_s {
 } Camera;
 
 #ifdef SDL_ENABLED
-// Easy function to draw text using SDL
+	// Easy function to draw text using SDL
 void DrawSDLText(TTF_Font* font, SDL_Surface* dst, int x, int y, char* format, ... )
 {
 	char buffer[256];
@@ -139,20 +172,20 @@ void DrawSDLText(TTF_Font* font, SDL_Surface* dst, int x, int y, char* format, .
 	va_start(args, format);
 	vsnprintf(buffer, 256, format, args);
 	va_end(args);
-
+	
 	SDL_Color textColor = { 255, 255, 255 };
 	SDL_Surface* msg = TTF_RenderText_Blended( font, buffer, textColor );
-
+	
 	SDL_Rect offset;
 	offset.x = (short)x;
 	offset.y = (short)y;
-    SDL_BlitSurface( msg, NULL, dst, &offset );
-
+	SDL_BlitSurface( msg, NULL, dst, &offset );
+	
 	SDL_FreeSurface(msg);
 }
 #endif
 
-// clamps x < a to x = a, x > b to x = b
+	// clamps x < a to x = a, x > b to x = b
 int clamp(int x, int a, int b)
 {
 	if (b < a)
@@ -168,15 +201,22 @@ int clamp(int x, int a, int b)
 	return x;
 }
 
-// Function for loading program settings
+	// Function for loading program settings
 int CameraLoadSettings( const char* filename )
 {
+		
+	printf( "Welcome to the latest version of the Star Tracker, 5/26/13.\n" );
+	printf( "This program is the result of combined efforts by Gil Tabak, Alexander Wickes, and Karanbir Toor, with the instruction of Professor Philip Lubin.\n" );
+	printf( "This program has been tested on a Mightex CGE-B013-U Camera.\n" );
+	printf( "Please see the README file for further instructions and a description of features offered.\n" );
+	printf( "Please also note the Settings.txt file, which the program uses as input.\n" );
+
 	FILE* file = fopen( filename, "r" );
 	if ( file == NULL )
 		printf( "Error opening settings file.\n" );
-
+	
 	Settings.TriggerMode =	IniGetBool( file, "TriggerMode", false );
-	Settings.DumpImages =	IniGetBool( file, "DumpImages", false );
+	Settings.DumpRaws =	IniGetBool( file, "DumpRaws", false );
 	Settings.DumpData =		IniGetBool( file, "DumpData", false );
 	Settings.ProcessImages =IniGetBool( file, "ProcessImages", false );
 	Settings.BitMode =		( IniGetBool( file, "BitMode12", true ) ? 12 : 8 );
@@ -197,14 +237,25 @@ int CameraLoadSettings( const char* filename )
 	Settings.DarkCoeff =	IniGetFloat( file, "DarkCoeff", 1.0f );
 	Settings.Latitude =		IniGetFloat( file, "Latitude", 0.0f );
 	Settings.Longitude =	IniGetFloat( file, "Longitude", 0.0f );
-	Settings.Altitude =	IniGetFloat( file, "Altitude", 0.0f );
-
+	Settings.Altitude =		IniGetFloat( file, "Altitude", 0.0f );
+	Settings.ReadRaw =	IniGetBool( file, "ReadRaw", false );
+	Settings.ReadFits =	IniGetBool( file, "ReadFits", false );
+	Settings.DumpFits =		IniGetBool( file, "DumpFits", false );
+	Settings.CaliMode =		IniGetBool( file, "CaliMode", false);
+	Settings.CaliTries =	IniGetInt( file, "CaliTries", 10 );
+	Settings.FocalError =	IniGetFloat( file, "FocalError", 0.01);
+	Settings.PriorRA =		IniGetFloat( file, "PriorRA", 999);
+	Settings.PriorDEC =		IniGetFloat( file, "PriorDEC", 999);
+	Settings.PriorError =	IniGetFloat( file, "PriorError", 0.4);
+	Settings.OutRad =		IniGetFloat( file, "OutRad", 3.0);
+	Settings.InRad =		IniGetFloat( file, "InRad", 1.3);
+	Settings.LostInSpace =	IniGetFloat( file, "LostInSpace", FALSE);
+	
 	if ( file != NULL )
 		fclose(file);
 	
-	/*
 	printf( "TriggerMode: %s\n", (Settings.TriggerMode ? "True" : "False") );
-	printf( "DumpImages: %s\n", (Settings.DumpImages ? "True" : "False") );
+	printf( "DumpRaws: %s\n", (Settings.DumpRaws ? "True" : "False") );
 	printf( "DumpData: %s\n", (Settings.DumpData ? "True" : "False") );
 	printf( "ProcessImages: %s\n", (Settings.ProcessImages ? "True" : "False") );
 	printf( "BitMode: %d\n", Settings.BitMode );
@@ -221,8 +272,16 @@ int CameraLoadSettings( const char* filename )
 	printf( "Latitude: %f\n", Settings.Latitude );
 	printf( "Longitude: %f\n", Settings.Longitude );
 	printf( "Altitude: %f\n", Settings.Altitude );
-	*/
-
+	//printf( "DumpFits: %s\n", Settings.DumpFits );
+	printf( "ReadRaw: %s\n", (Settings.ReadRaw ? "True" : "False") );
+	printf( "ReadFits: %s\n", (Settings.ReadFits ? "True" : "False") );
+	// The following print statements made the code crash. Not sure why.
+	/*printf( "CaliMode: %s\n", Settings.CaliMode );
+	printf( "CaliTries: %d\n", Settings.CaliTries );
+	printf( "FocalError: %f\n", Settings.FocalError );
+	printf( "PriorRA: %f\n", Settings.PriorRA );
+	printf( "PriorDEC: %f\n", Settings.PriorDEC );*/
+	
 	return 1;
 }
 
@@ -247,264 +306,841 @@ void GUIFlipScreen()
 void GUIPrintText( const char* txt, ... )
 {
 	char buffer[4*1024];
-    va_list argptr;
-    va_start(argptr, txt);
-    vsnprintf(buffer, 4*1024, txt, argptr);
-
+	va_list argptr;
+	va_start(argptr, txt);
+	vsnprintf(buffer, 4*1024, txt, argptr);
+	
 	DrawSDLText( font, screen, 0, yText, buffer );
-    
+	
 	va_end(argptr);
-
+	
 	yText += FONT_SIZE;
 }
 
 #endif
 
-// Callback function for handling 
-void FrameCallBack( TProcessedDataProperty* Attributes, unsigned char* BytePtr )
+void printTo_FIT_file(FILE * pFile, unsigned char* data){
+	string temp = "";
+    // Header is 469 bytes long.
+	temp += "SIMPLE  =     T";
+	for (int i = 0; i<80-15; i++)
+		temp += " ";
+	temp += "BITPIX  =    16";
+	for (int i = 0; i<80-15; i++)
+		temp += " ";
+	temp += "NAXIS   =     2";
+	for (int i = 0; i<80-15; i++)
+		temp += " ";
+	temp += "NAXIS1  =   1280";
+	for (int i = 0; i<80-16; i++)
+		temp += " ";
+	temp += "NAXIS2  =   960";
+	for (int i = 0; i<80-15; i++)
+		temp += " ";
+	temp += "END";
+	for (int i = 0; i<80-15; i++)
+		temp += " ";
+	fwrite(temp.c_str(), temp.length(), 1, pFile);
+	
+    // Now I add the padding because the header must be 2880 bytes long. 
+	unsigned char c = 0;
+	unsigned char* buffer = new unsigned char[2880-468];
+	for (int i = 0; i<2880-468; i++) {
+		buffer[i] = c;
+	}
+	fwrite(buffer, 2880-468, 1, pFile);
+		//cout << "wrote header size: " << temp.length() + 2880-468 << endl;
+	
+	fwrite (data , 2*CAMERA_WIDTH*Settings.ImageHeight , 1 , pFile );
+	
+	unsigned char* buffer2 = new unsigned char[2880 - ((2*CAMERA_WIDTH*Settings.ImageHeight) % 2880)];
+	c = 0;
+	for (int i=0; i< 2880 - ((2*CAMERA_WIDTH*Settings.ImageHeight) % 2880) ; i++) {
+		buffer2[i] = c;
+	}
+	
+	fwrite(buffer2, 2880 - ((2*CAMERA_WIDTH*Settings.ImageHeight) % 2880), 1, pFile);
+	
+	delete buffer2;
+	delete buffer;
+	fclose (pFile);
+}
+
+unsigned char* readFitsFileIntoBuffer(const char* f) {
+	FILE * pFile;
+	long lSize;
+	unsigned char * buffer;
+	size_t result;
+	
+	pFile = fopen ( f , "rb" );
+	if (pFile==NULL) {fputs ("File error",stderr); exit (1);}
+	
+		// obtain file size:
+	rewind (pFile);
+	fseek (pFile , 0 , SEEK_END);
+	lSize = ftell (pFile);
+	rewind (pFile);
+	fseek ( pFile , 2880 , SEEK_SET );
+	
+		// allocate memory to contain the whole file:
+	buffer = new unsigned char[CAMERA_WIDTH*Settings.ImageHeight*2];
+		//if (buffer == NULL) {fputs ("Memory error",stderr); exit (2);}
+	
+		// copy the file into the buffer:
+	result = fread (buffer,CAMERA_WIDTH*Settings.ImageHeight*2, 1,pFile);
+		//if (result != lSize) {fputs ("Reading error",stderr); exit (3);}
+	
+	/* the whole file is now loaded in the memory buffer. */
+	
+		// terminate
+	fclose (pFile);
+	
+	return buffer;
+}
+
+unsigned char* extractDataFromRawFile(std::string fileName){
+  FILE * pFile;
+  long lSize;
+  unsigned char * buffer;
+  size_t result;
+	
+  pFile = fopen ( "./data/image_20130518_190308696.raw" , "rb" );
+  if (pFile==NULL) {fputs ("File error\n",stderr);}
+  
+		// obtain file size:
+  fseek (pFile , 0 , SEEK_END);
+  lSize = ftell (pFile);
+  rewind (pFile);
+	
+		// allocate memory to contain the whole file:
+  buffer = (unsigned char*) malloc (sizeof(unsigned char)*lSize);
+  if (buffer == NULL)  {printf("Memory error\n");}
+	
+		// copy the file into the buffer:
+  result = fread (buffer,1,lSize,pFile);
+  if (result != lSize)  {printf("Reading error\n");}
+	
+		// terminate
+  fclose (pFile);
+  printf("---------------------------\n");
+  printf("%d\n",lSize);
+  printf("---------------------------\n");
+  return (unsigned char*)buffer;
+}
+
+void putFileNamesIntoVector(const char* dir){
+	FILE * pFile;
+  long lSize;
+  char * buffer;
+  size_t result;
+	
+	char nameFilePath[100];
+	sprintf(nameFilePath, "./%s/names.txt",dir);
+  pFile = fopen ( nameFilePath , "rb" );
+  if (pFile==NULL) {fputs ("File error",stderr);}
+	
+		// obtain file size:
+  fseek (pFile , 0 , SEEK_END);
+  lSize = ftell (pFile);
+  rewind (pFile);
+	
+		// allocate memory to contain the whole file:
+  buffer = (char*) malloc (sizeof(char)*lSize);
+  if (buffer == NULL) {printf("Memory error\n");}
+	
+		// copy the file into the buffer:
+  result = fread (buffer,1,lSize,pFile);
+  if (result != lSize) {printf("Reading error\n");}
+	
+  /* the whole file is now loaded in the memory buffer. */
+	
+	// push individual file names into the names vector
+  int i=0;
+  int j;
+  while(i<lSize){
+	  for(j=i; buffer[j] != '\n'; j++)
+		  j;
+	  names.push_back(string(&buffer[i],j-i));
+	  i=j+1;
+  }
+
+  std::vector<string>::size_type sz = names.size();
+  printf("read the following names from names.txt\n");
+  for(unsigned int i=0; i<sz; i++)
+	  printf("%s\n",names[i]);
+		// terminate
+  fclose (pFile);
+  free (buffer);
+}
+
+int to_int(char c)
 {
-	if ( Attributes->CameraID == Camera.DeviceID ) // The working camera.
-	{
+     switch(c)
+     {   //  makes no assumptions about character order
+          case '0': return 0 ;
+          case '1': return 1 ;
+          case '2': return 2 ;
+          case '3': return 3 ;
+          case '4': return 4 ;
+          case '5': return 5 ;
+          case '6': return 6 ;
+          case '7': return 7 ;
+          case '8': return 8 ;
+          case '9': return 9 ;
+          default: return -1 ;
+     }
+}
+
+//gets date from image name, and puts it in Image_LocalTime struct.
+void parseFileNameForDate(char* filename){
+
+	filename += 20;
+	for (; *filename != '_'; filename++); //loop until '_' after image
+	filename++; // ptr == '_', skip
+
+	Image_LocalTime.wYear = to_int(*filename++)*1000;
+	Image_LocalTime.wYear += to_int(*filename++)*100;	
+	Image_LocalTime.wYear += to_int(*filename++)*10;
+	Image_LocalTime.wYear += to_int(*filename++);
+	
+	Image_LocalTime.wMonth = to_int(*filename++)*10;
+	Image_LocalTime.wMonth += to_int(*filename++);
+	
+	Image_LocalTime.wDay = to_int(*filename++)*10 ;
+	Image_LocalTime.wDay += to_int(*filename++);
+
+	*filename++; // ptr == '_', skip
+	
+	Image_LocalTime.wHour = to_int(*filename++)*10;
+	Image_LocalTime.wHour += to_int(*filename++);
+	
+	Image_LocalTime.wMinute = to_int(*filename++)*10;
+	Image_LocalTime.wMinute += to_int(*filename++);
+	
+	Image_LocalTime.wSecond = to_int(*filename++)*10 ;
+	Image_LocalTime.wSecond += to_int(*filename++);
+
+	Image_LocalTime.wMilliseconds = to_int(*filename++)*100;
+	Image_LocalTime.wMilliseconds += to_int(*filename++)*10;
+	Image_LocalTime.wMilliseconds += to_int(*filename++);
+
+//	printf("Image Time IN PARSE METHOD is %04d%02d%02d_%02d%02d%02d%03d\n", Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
+//	Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+
+
+	return;
+}
+
+// Callback function for handling 
+
+// broke apart FrameCallBack. This function is called either through the camera FrameCallBack function,
+// or directly if Settings.readRaw is true.
+void FrameCallBackHelper(unsigned char* BytePtr )
+{
+#ifdef TIMERS_ON 
+	Timer FrameCallBackHelperTimer;
+	FrameCallBackHelperTimer.StartTimer();
+#endif
+
+	if ( Settings.CaliMode )
+		Prior.focal_length = Settings.FocalLength;
+	if ( Settings.PriorRA != 999 && Settings.PriorDEC !=999 && Prior_Valid == false && !Settings.LostInSpace){
+		Prior.coords.RA = Settings.PriorRA;
+		Prior.coords.DEC = Settings.PriorDEC;
+		Prior_Valid = true;
+	}
 		SYSTEMTIME localtime;
 		GetLocalTime( &localtime );
-		/*
-		printf( "Grabbing frame: %04d.%02d.%02d : %02d:%02d:%02d.%03d\n", systime.wYear, systime.wMonth, systime.wDay,
-							systime.wHour, systime.wMinute, systime.wSecond, systime.wMilliseconds );
-							*/
 		Image_LocalTime = localtime;
 
-		//printf( "BytePtr at %08X\n", (unsigned int)BytePtr);
+	// return when passed NULL, unless reading from file (when NULL is used)
+	if ( BytePtr == NULL && !Settings.ReadRaw && !Settings.ReadFits)
+		return;
 
-		if ( BytePtr == NULL )
+	// If in 12 bit mode, fix the messed up bit ordering.
+	// No need to run this if reading images from file
+	if ( Settings.BitMode == 12 && !Settings.ReadRaw && !Settings.ReadFits )
+	{
+		int i;
+		unsigned short* BytePtr16 = (unsigned short*)BytePtr;
+		for ( i = 0; i < CAMERA_WIDTH*Settings.ImageHeight; i++ )
+			BytePtr16[i] = (BytePtr[2*i] << 4) | BytePtr[2*i+1];
+	}
+
+	if(Settings.ReadRaw){
+
+#ifdef TIMERS_ON
+		Timer ReadRawTimer;
+		ReadRawTimer.StartTimer();
+#endif
+
+		if (namesIterator < names.size()){
+			char fileName[512];
+			//char hardCode[] = "./data_20130518_193209/image_20130518_193209735.raw";
+			//sprintf(fileName, "%s", names[namesIterator].data());
+			printf("Name     : %s\n",names[namesIterator]);
+			//printf("char name: %s\n",fileName);
+			BytePtr = new unsigned char[CAMERA_WIDTH*Settings.ImageHeight*2];
+
+			int pos = 0;
+			for(int i=0; i<names[namesIterator].length()-1; i++){
+				fileName[i] = names[namesIterator].data()[i];
+			}
+
+			fileName[names[namesIterator].length()-1] = 0;
+			
+			//if reading from image, read the time off the image. Overwrites Image_LocalTime.
+			 parseFileNameForDate(fileName);
+			//printf("Image Time is %04d%02d%02d_%02d%02d%02d%03d\n", Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
+		//	Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+
+
+			//FILE* inputFile = fopen("./data_20130518_193209/image_20130518_193209735.raw", "r");
+			FILE* inputFile = fopen(fileName, "rb");
+			if ( inputFile == NULL ){
+				printf( "Error: Could not open file.\n" );
+			} else {
+				printf("Raw file Open.\n");
+				fread (BytePtr,CAMERA_WIDTH*Settings.ImageHeight*2,1,inputFile);
+				fclose(inputFile);
+			}
+			//initialize the catalog.
+			if (namesIterator == 0)
+				glCatalog.Initialize( "catalog.txt", &Image_LocalTime, Settings.FocalLength );
+
+			namesIterator++; //next time, access the next image
+			//return;			
+#ifdef TIMERS_ON
+	ReadRawTimer.StopTimer();
+	printf("Successfully Read File. | Time elapsed: %d ms \n", ReadRawTimer.GetTime());
+#endif
+		} else
 			return;
+	}
 
-		// If in 12 bit mode, fix the messed up bit ordering.
-		if ( Settings.BitMode == 12 )
-		{
-			int i;
+	if(Settings.ReadFits){
+
+#ifdef TIMERS_ON
+		Timer ReadFitsTimer;
+		ReadFitsTimer.StartTimer();
+#endif
+
+		if (namesIterator < names.size()){
+			char fileName[512];
+			//char hardCode[] = "./data_20130518_193209/image_20130518_193209735.raw";
+			//sprintf(fileName, "%s", names[namesIterator].data());
+			printf("Name     : %s\n",names[namesIterator]);
+			//printf("char name: %s\n",fileName);
+			BytePtr = new unsigned char[CAMERA_WIDTH*Settings.ImageHeight*2];
 			unsigned short* BytePtr16 = (unsigned short*)BytePtr;
-			for ( i = 0; i < CAMERA_WIDTH*Settings.ImageHeight; i++ )
-				BytePtr16[i] = (BytePtr[2*i] << 4) | BytePtr[2*i+1];
+
+			for(int i=0; i<names[namesIterator].length()-1; i++){
+				fileName[i] = names[namesIterator].data()[i];
+			}
+			fileName[names[namesIterator].length()-1] = 0;
+
+			
+			//if reading from image, read the time off the image. Overwrites Image_LocalTime.
+			parseFileNameForDate(fileName);
+
+			////////////////////////
+			//FILE* inputFile = fopen("./data_20130518_193209/image_20130518_193209735.raw", "r");
+			fitsfile *fptr;       /* pointer to the FITS file, defined in fitsio.h */
+			int status, ii, jj;
+			long  fpixel, nelements, exposure;
+
+			/* initialize FITS image parameters */
+			int bitpix   =  USHORT_IMG; /* 16-bit unsigned short pixel values       */
+			long naxis    =   2;  /* 2-dimensional image                            */    
+			long naxes[2] = { CAMERA_WIDTH , Settings.ImageHeight }; 
+
+			status = 0;         /* initialize status before calling fitsio routines */
+			printf(">>>>>>>>>>>>>>>>>>>>\n");
+			if (fits_open_file(&fptr, fileName, READONLY, &status)) /* open FITS file */
+				printf("Error: Couldn't open a FITS file\n");           /* call printerror if error occurs */
+
+			int anul;
+			if (fits_read_img(fptr, USHORT_IMG, 1, (long long)CAMERA_WIDTH*Settings.ImageHeight, NULL, (void*)BytePtr16, &anul, &status)) /* read data from FITS file */
+				//printf("Error: Couldn't read a FITS file\n");           /* call printerror if error occurs */
+
+			if ( fits_close_file(fptr, &status) )                /* close the file */
+				printf("Error: Couldn't close the file\n");
+			/*FILE* inputFile = fopen(fileName, "rb");
+			if ( inputFile == NULL ){
+				printf( "Error: Could not open file.\n" );
+			} else {
+				printf("Raw file Open.\n");
+				// 2880 is the size of the fits header
+				fseek(inputFile, 2880, SEEK_SET);
+				fread (BytePtr,1,CAMERA_WIDTH*Settings.ImageHeight*2,inputFile);
+				fclose(inputFile);
+			}*/
+			//////////////
+			printf("<<<<<<<<<<<<<<<<<<<<<<\n");
+
+			//initialize the catalog.
+			if (namesIterator == 0)
+				glCatalog.Initialize( "catalog.txt", &Image_LocalTime, Settings.FocalLength );
+
+			namesIterator++; //next time, access the next image
+			//return;			
+#ifdef TIMERS_ON
+	ReadFitsTimer.StopTimer();
+	printf("Successfully Read File. | Time elapsed: %d ms \n", ReadFitsTimer.GetTime());
+#endif
+		} else
+			return;
+	}
+
+	if (Settings.DumpRaws)
+	{
+		// Save image to file w/ timestamp
+		char buffer[512];
+
+		// get system timestamp (millisecond accuracy)
+		int nameSize = sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.raw", dir_name, Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
+			Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+
+		// create a file containing the names of all the files in the directoy
+		char nameFileBuffer[512];
+		int lastIndex = sprintf(nameFileBuffer, "./%s/names.txt",dir_name);
+		FILE* namesFile = fopen(nameFileBuffer,"a");
+		fwrite(buffer, nameSize, 1, namesFile );
+		fwrite("\n", 1, 1, namesFile);
+		fclose(namesFile);
+		// -------------------------------------------------------------------
+
+
+		FILE* file = fopen(buffer, "wb");
+		if ( file == NULL )
+		{
+			printf( "Error: Could not open file.\n" );
+		}
+		else
+		{
+			int pixel_bytes = ( Settings.BitMode == 8 ? 1 : 2 );
+			fwrite( BytePtr, CAMERA_WIDTH*Settings.ImageHeight*pixel_bytes, 1, file );
+			fclose(file);
+			//printf( "Wrote to file successfully.\n" );
+		}
+	}
+
+	if (Settings.DumpFits)
+	{
+		unsigned short* BytePtr16 = (unsigned short*)BytePtr;
+		fitsfile *fptr;       /* pointer to the FITS file, defined in fitsio.h */
+		int status, ii, jj;
+		long  fpixel, nelements, exposure;
+
+		/* initialize FITS image parameters */
+		int bitpix   =  USHORT_IMG; /* 16-bit unsigned short pixel values       */
+		long naxis    =   2;  /* 2-dimensional image                            */    
+		long naxes[2] = { CAMERA_WIDTH , Settings.ImageHeight }; 
+
+		status = 0;         /* initialize status before calling fitsio routines */
+
+		// Save image to file w/ timestamp
+		char buffer[512];
+
+		// get system timestamp (millisecond accuracy)
+		int nameSize = sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.fits", fits_dir_name, Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
+			Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+
+		if (fits_create_file(&fptr, buffer, &status)) /* create new FITS file */
+			printf("Error: Couldn't create a FITS file");           /* call printerror if error occurs */
+
+			/* write the required keywords for the primary array image.     */
+			/* Since bitpix = USHORT_IMG, this will cause cfitsio to create */
+			/* a FITS image with BITPIX = 16 (signed short integers) with   */
+			/* BSCALE = 1.0 and BZERO = 32768.  This is the convention that */
+			/* FITS uses to store unsigned integers.  Note that the BSCALE  */
+			/* and BZERO keywords will be automatically written by cfitsio  */
+			/* in this case.                                                */
+
+		if ( fits_create_img(fptr,  bitpix, naxis, naxes, &status) )
+			printf( "Error: Couldn't create the image" );
+
+		fpixel = 1;                               /* first pixel to write      */
+		nelements = naxes[0] * naxes[1];          /* number of pixels to write */
+
+		//Writes the image to the file
+		if ( fits_write_img(fptr, TUSHORT, fpixel, nelements, BytePtr16, &status) )
+			printf("Error: Couldn't write the image");
+
+		if ( fits_close_file(fptr, &status) )                /* close the file */
+			printf("Error: Couldn't close the file");
+		
+		// create a file containing the names of all the files in the directoy
+		char nameFileBuffer[512];
+		int lastIndex = sprintf(nameFileBuffer, "./%s/names.txt",fits_dir_name);
+		FILE* namesFile = fopen(nameFileBuffer,"a");
+		fwrite(buffer, nameSize, 1, namesFile );
+		fwrite("\n", 1, 1, namesFile);
+		fclose(namesFile);
+		// -------------------------------------------------------------------
+	}
+
+#ifdef TIMERS_ON
+	Timer SumTimer;
+	SumTimer.StartTimer();
+#endif
+
+	int bytes_pp = (Settings.BitMode == 12 ? 2 : 1);
+	unsigned short* BytePtr16 = (unsigned short*)BytePtr;
+	// If Binning is enabled, average pixels horizontally (camera only bins vertically)
+	if ( Settings.BinMode > 1 )
+	{
+		long long sum;
+		int x, y, i;
+		for ( y = 0; y < Settings.ImageHeight; y++ )
+		{
+			for ( x = 0; x < Settings.ImageWidth; x++ )
+			{
+				sum = 0;
+				for ( i = 0; i < Settings.BinMode; i++ )
+				{
+					if ( Settings.BitMode == 12 )
+						sum += BytePtr16[y*CAMERA_WIDTH + x*Settings.BinMode+i];
+					else
+						sum += BytePtr[y*CAMERA_WIDTH + x*Settings.BinMode+i];
+				}
+				if ( Settings.BitMode == 12 )
+					BytePtr16[y*Settings.ImageWidth + x] = sum / Settings.BinMode;
+				else
+					BytePtr[y*Settings.ImageWidth + x] = sum / Settings.BinMode;
+			}
+		}
+	}
+#ifdef TIMERS_ON
+	SumTimer.StopTimer();
+	printf("Successfully computed sum| Time elapsed: %d ms \n", SumTimer.GetTime());
+#endif
+
+	
+#ifdef TIMERS_ON
+	Timer ProcessingTimer;
+	ProcessingTimer.StartTimer();
+#endif
+	// Copy temporary framebuffer to static framebuffer for display in GUI
+	memcpy( pixel_data, BytePtr, Settings.ImageWidth*Settings.ImageHeight*bytes_pp );
+
+	if ( Settings.ProcessImages )
+	{
+
+#ifdef TIMERS_ON
+	Timer DarkImageTimer;
+	DarkImageTimer.StartTimer();
+#endif
+		if ( DarkImage.data != NULL )
+		{
+			// Subtract the dark image.
+			int i;
+			short* BytePtr16s = (short*)BytePtr;
+			unsigned short* BytePtr16 = (unsigned short*)BytePtr;
+			unsigned short* DarkPtr16 = (unsigned short*)DarkImage.data;
+			for ( i = 0; i < Settings.ImageWidth*Settings.ImageHeight; i++ )
+				BytePtr16s[i] = short( BytePtr16[i] - Settings.DarkCoeff * DarkPtr16[i] );
 		}
 
-		if (Settings.DumpImages)
+#ifdef TIMERS_ON
+	DarkImageTimer.StopTimer();
+	printf("Successfully subtracted dark. | Time elapsed: %d ms \n", DarkImageTimer.GetTime());
+#endif
+
+		if ( glCatalog.initialized )
 		{
-			// Save image to file w/ timestamp
-			char buffer[512];
+			detector_s Detector = {
+				GL_SAMPLE_SKIP,
+				LOCAL_WIDTH,
+				LOCAL_HEIGHT,
+				LOCAL_SAMPLE_SKIP,
+				STAR_MIN_OUTSTND,
+				0.0
+			};
+			image_s Image = {
+				Settings.ImageWidth,
+				Settings.ImageHeight,
+				Settings.BitMode,
+				Settings.FocalLength,
+				BytePtr,
+				NULL
+			};
 
-			// get system timestamp (millisecond accuracy)
-			sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.raw", dir_name, localtime.wYear, localtime.wMonth, localtime.wDay,
-							localtime.wHour, localtime.wMinute, localtime.wSecond, localtime.wMilliseconds );
+			num_detected = DetectStars(ImageStars, &Detector, &Image, Settings.OutRad, Settings.InRad);
+			//printf( "	Number of Stars Detected: %d\n", num_detected );
+			Mean_Sky_Level = Detector.mean_sky < 100000? (float)Detector.mean_sky: 0;
 
-			FILE* file = fopen(buffer, "wb");
-			if ( file == NULL )
+
+			if (ImageStars.size() >= 3)
 			{
-				printf( "Error: Could not open file.\n" );
+
+				coordinates Coords, BoresightCoords;
+				sfloat R[3][3];
+				sfloat RQuat[4];
+				double err = 0;
+
+				// if calibration mode is on, try different focal lengths.
+				/*
+				Specify bounds and increments in settings.txt file.
+				Use focal_length as the starting point, and move outwards.
+				*/
+
+				if (Settings.CaliMode){
+					float currentFocal = Settings.FocalLength;
+					float startingFocal = Settings.FocalLength;//Prior_Valid? Prior.focal_length: Settings.FocalLength;
+
+					//max error, in pixels
+					float maxError = Settings.FocalError * Settings.FocalLength;
+					// maybe try:
+					Image_Correct_ID = false;
+					for(  int f = 0; f < Settings.CaliTries && !Image_Correct_ID; f++ ){
+
+						//add or subtract, moving outwards from the best guess.
+						if (f%2 == 0)
+							currentFocal = startingFocal + ( (float) f) * maxError / Settings.CaliTries;
+						else currentFocal = startingFocal - ( (float) f) * maxError / Settings.CaliTries;
+
+						//adjust image stars r_prime vector using GetSphericalFromImage with different focal lengths:
+						for (int i = 0; i < ImageStars.size(); i++)
+							GetSphericalFromImage(	ImageStars[i].centroid_x - IMAGE_WIDTH/2.0f + 0.5f, 
+							ImageStars[i].centroid_y - IMAGE_HEIGHT/2.0f + 0.5f,
+							currentFocal, ImageStars[i].r_prime );
+
+						// enough stars, continue with identification
+						IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
+
+						double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err);
+						Image_Correct_ID = ( rms_error <= 0.01 );
+					}
+				}
+				// else calibration mode is NOT on
+				else{ 
+					// enough stars, continue with identification
+					IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
+					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err);
+					Image_Correct_ID = ( rms_error <= 0.01 );
+				}
+
+				if ( Image_Correct_ID )
+				{
+					
+					if (Settings.CaliMode){
+						FILE* file;
+						if (Settings.DumpData)
+							file = fopen(output_foc, "a");
+						else file = NULL;
+
+						double currentFocal = Settings.FocalLength - Settings.FocalError * Settings.FocalLength;
+						double min_err = err; // we'll find the min err. Set to the one retrieved previously, which is >= min_err.
+						double min_focal = currentFocal;
+
+						vector<double> rms_error_trials;
+						rms_error_trials.clear();
+						rms_error_trials.reserve(Settings.CaliTries);
+						for (int f = 0; f < Settings.CaliTries; f++){
+						
+							//adjust image stars r_prime vector using GetSphericalFromImage with different focal lengths:
+							for (int i = 0; i < ImageStars.size(); i++)
+								GetSphericalFromImage(	ImageStars[i].centroid_x - IMAGE_WIDTH/2.0f + 0.5f, 
+								ImageStars[i].centroid_y - IMAGE_HEIGHT/2.0f + 0.5f,
+								currentFocal, ImageStars[i].r_prime );
+
+							currentFocal += 2*Settings.FocalError * Settings.FocalLength / Settings.CaliTries;
+							GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err) ;
+							rms_error_trials.push_back(err);
+
+						if ( file != NULL ){
+							fprintf(file, "%.3f ", currentFocal);
+						}
+
+							if (err < min_err){
+								min_err = err;
+								min_focal = currentFocal;
+							}
+						}
+						if ( file != NULL ){
+							fprintf(file, "\n");
+						}
+
+						//print min focal length and err.
+						//printf("min foc: %f | min err: %f\n",min_focal, min_err);
+						
+						currentFocal = Settings.FocalLength - Settings.FocalError * Settings.FocalLength;
+						//print all focals and their error
+						/*for (int f = 0; f < Settings.CaliTries; f++){
+							currentFocal += Settings.FocalError * Settings.FocalLength / Settings.CaliTries;
+							printf("Foc Len: %f | err: %f\n",currentFocal, rms_error_trials[f]);
+						}*/
+						if ( file != NULL )
+							for (int i = 0; i < rms_error_trials.size(); i++){
+								fprintf(file, "%.7f ", rms_error_trials[i]);
+							}
+						if ( file != NULL ){
+							fprintf(file, "\n");
+						}
+
+						num_im_cali ++;
+						running_foc = (running_foc*(num_im_cali-1) + min_focal) / num_im_cali;
+						if (num_im_cali%20 == 9)
+							Settings.FocalLength = running_foc;
+
+						//print calibrated focal length and err.
+						printf("running calibrated focal length: %.2f\n",running_foc);
+						fclose(file);
+					}
+					Prior.coords = Coords;
+					Prior.tickCount = GetTickCount();
+					if (!Settings.LostInSpace)
+						Prior_Valid = true;
+					//Prior.focal_length = currentFocal;
+
+					Image_Coords = Coords;
+
+					double JDN;
+					// Get Az, El
+					if (Settings.ReadRaw || Settings.ReadFits)
+						JDN = getJulianDate( &Image_LocalTime );
+					else{
+						SYSTEMTIME systime;
+						GetSystemTime( &systime );
+						JDN = getJulianDate( &systime );
+					}
+					double LAT = Settings.Latitude * M_PI / 180;
+					double LONG = Settings.Longitude * M_PI / 180;
+					//printf("Julian: %f\n", JDN);
+					Image_LST = getLST( LONG, JDN );
+					Image_HA = getHA1( Image_LST, Coords.RA );
+					Image_Azi = getAzi( Image_HA, LAT, Coords.DEC );
+					Image_Ele = getEle( Image_HA, LAT, Coords.DEC );
+					//Ele_Corr = correctEle( );
+
+					//find the Boresight Angle from BoresightCoords
+					double HA, AZI;
+					HA = getHA1( Image_LST, BoresightCoords.RA );
+					AZI = getAzi( HA, Settings.Latitude, BoresightCoords.DEC );
+					Image_Bore = acos ( cos(Image_Azi) * sin(AZI) - sin(Image_Azi) * cos(AZI) );
+
+					int i, j;
+					for ( i = 0; i < 3; i++ )
+						for ( j = 0; j < 3; j++ )
+							Image_Rt[i][j] = R[j][i];
+				}
+				// no solution:
+				else if ( Prior_Valid && GetTickCount() - Prior.tickCount >= PRIOR_TIMEOUT*1000 )
+				{
+					Prior_Valid = false;
+				}
+
+				if ( Settings.DumpData )
+				{
+					// Write data to output.txt
+					FILE* file = fopen(output_name, "a");
+					if ( file != NULL )
+					{
+						// change to CSV output
+						if ( Image_Correct_ID )
+						{
+							coords_discrete coords;
+							GetDiscreteCoords(&Coords, &coords);
+							fprintf(file, "%02d/%02d/%04d "
+								"%02d:%02d:%02d.%03d,"
+								"%.4f, %.4f, %.1f,"
+								"%.6f, %.6f,"
+								"%02d:%02d:%f,"
+								"%02d:%02d:%f,"
+								"%.4f,%.4f,%d,"
+								"%.1f,%d,"
+								"%f,%f,%f,%f,"
+								"%f\n",
+								Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
+								Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds,
+								Settings.Latitude, Settings.Longitude, Settings.Altitude,
+								Coords.RA*180/M_PI, Coords.DEC*180/M_PI,
+								coords.RA_hr, coords.RA_min, coords.RA_sec,
+								coords.DEC_deg, coords.DEC_min, coords.DEC_sec,
+								Image_Azi*180/M_PI, Image_Ele*180/M_PI, Ele_Corr,
+								Detector.mean_sky, num_detected,
+								RQuat[0], RQuat[1], RQuat[2], RQuat[3],running_foc);
+							//			Prior.focal_length);
+
+
+							//fprintf(file, "MM/DD/YYYY Time,LAT,LONG,ALT,RA,DEC,RA_hr,DEC_deg,AZI,ELE,AtmCorr,MeanSky,NumDetected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
+						}
+						else
+						{
+							fprintf(file, "%02d/%02d/%04d "
+								"%02d:%02d:%02d.%03d,"
+								"%.4f, %.4f, %.1f,"
+								"ERR,ERR,ERR,ERR,"
+								"ERR,ERR,ERR,"
+								"%.1f,%d,"
+								"ERR,ERR,ERR,ERR,ERR\n",
+								Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
+								Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds,
+								Settings.Latitude, Settings.Longitude, Settings.Altitude,
+								Detector.mean_sky, num_detected );
+						}
+						fclose(file);
+					}
+				}
 			}
 			else
 			{
-				int pixel_bytes = ( Settings.BitMode == 8 ? 1 : 2 );
-				fwrite( BytePtr, CAMERA_WIDTH*Settings.ImageHeight*pixel_bytes, 1, file );
-
-				fclose(file);
-				//printf( "Wrote to file successfully.\n" );
+				printf("	Not enough stars to continue.\n");
 			}
 		}
-		
-		int bytes_pp = (Settings.BitMode == 12 ? 2 : 1);
-		unsigned short* BytePtr16 = (unsigned short*)BytePtr;
-		// If Binning is enabled, average pixels horizontally (camera only bins vertically)
-		if ( Settings.BinMode > 1 )
-		{
-			unsigned int sum;
-			int x, y, i;
-			for ( y = 0; y < Settings.ImageHeight; y++ )
-			{
-				for ( x = 0; x < Settings.ImageWidth; x++ )
-				{
-					sum = 0;
-					for ( i = 0; i < Settings.BinMode; i++ )
-					{
-						if ( Settings.BitMode == 12 )
-							sum += BytePtr16[y*CAMERA_WIDTH + x*Settings.BinMode+i];
-						else
-							sum += BytePtr[y*CAMERA_WIDTH + x*Settings.BinMode+i];
-					}
-					if ( Settings.BitMode == 12 )
-						BytePtr16[y*Settings.ImageWidth + x] = sum / Settings.BinMode;
-					else
-						BytePtr[y*Settings.ImageWidth + x] = sum / Settings.BinMode;
-				}
-			}
-		}
-		// Copy temporary framebuffer to static framebuffer for display in GUI
-		memcpy( pixel_data, BytePtr, Settings.ImageWidth*Settings.ImageHeight*bytes_pp );
-
-		if ( Settings.ProcessImages )
-		{
-			if ( DarkImage.data != NULL )
-			{
-				// Subtract the dark image.
-				int i;
-				short* BytePtr16s = (short*)BytePtr;
-				unsigned short* BytePtr16 = (unsigned short*)BytePtr;
-				unsigned short* DarkPtr16 = (unsigned short*)DarkImage.data;
-				for ( i = 0; i < Settings.ImageWidth*Settings.ImageHeight; i++ )
-					BytePtr16s[i] = short( BytePtr16[i] - Settings.DarkCoeff * DarkPtr16[i] );
-			}
-
-			if ( glCatalog.initialized )
-			{
-				detector_s Detector = {
-					GL_SAMPLE_SKIP,
-					LOCAL_WIDTH,
-					LOCAL_HEIGHT,
-					LOCAL_SAMPLE_SKIP,
-					STAR_MIN_OUTSTND,
-					0.0
-				};
-				image_s Image = {
-					Settings.ImageWidth,
-					Settings.ImageHeight,
-					Settings.BitMode,
-					Settings.FocalLength,
-					BytePtr,
-					NULL
-				};
-
-				num_detected = DetectStars(ImageStars, &Detector, &Image);
-				//printf( "	Number of Stars Detected: %d\n", num_detected );
-				Mean_Sky_Level = (float)Detector.mean_sky;
-
-				if (ImageStars.size() >= 3)
-				{
-					// enough stars, continue with identification
-					IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
-
-					coordinates Coords, BoresightCoords;
-					sfloat R[3][3];
-					sfloat RQuat[4];
-					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat);
-					Image_Correct_ID = ( rms_error <= 0.01 );
-
-					if ( Image_Correct_ID )
-					{
-						Prior.coords = Coords;
-						Prior.tickCount = GetTickCount();
-						Prior_Valid = true;
-
-						Image_Coords = Coords;
-
-						// Get Az, El
-						SYSTEMTIME systime;
-						GetSystemTime( &systime );
-						double JDN = getJulianDate( &systime );
-						double LAT = Settings.Latitude * M_PI / 180;
-						double LONG = Settings.Longitude * M_PI / 180;
-						//printf("Julian: %f\n", JDN);
-						Image_LST = getLST( LONG, JDN );
-						Image_HA = getHA1( Image_LST, Coords.RA );
-						Image_Azi = getAzi( Image_HA, LAT, Coords.DEC );
-						Image_Ele = getEle( Image_HA, LAT, Coords.DEC );
-						//Ele_Corr = correctEle( );
-
-						//find the Boresight Angle from BoresightCoords
-						double HA, AZI;
-						HA = getHA1( Image_LST, BoresightCoords.RA );
-						AZI = getAzi( HA, Settings.Latitude, BoresightCoords.DEC );
-						Image_Bore = acos ( cos(Image_Azi) * sin(AZI) - sin(Image_Azi) * cos(AZI) );
-
-						int i, j;
-						for ( i = 0; i < 3; i++ )
-							for ( j = 0; j < 3; j++ )
-								Image_Rt[i][j] = R[j][i];
-					}
-					else if ( Prior_Valid && GetTickCount() - Prior.tickCount >= PRIOR_TIMEOUT*1000 )
-					{
-						Prior_Valid = false;
-					}
-
-					if ( Settings.DumpData )
-					{
-						// Write data to output.txt
-						FILE* file = fopen(output_name, "a");
-						if ( file != NULL )
-						{
-							// change to CSV output
-							if ( Image_Correct_ID )
-							{
-								coords_discrete coords;
-								GetDiscreteCoords(&Coords, &coords);
-								fprintf(file, "%02d/%02d/%04d "
-											  "%02d:%02d:%02d.%03d,"
-											  "%.4f, %.4f, %.1f,"
-											  "%.6f, %.6f,"
-											  "%02d:%02d:%f,"
-											  "%02d:%02d:%f,"
-											  "%.4f,%.4f,%d,"
-											  "%.1f,%d,"
-											  "%f,%f,%f,%f\n",
-										localtime.wMonth, localtime.wDay, localtime.wYear,
-										localtime.wHour, localtime.wMinute, localtime.wSecond, localtime.wMilliseconds,
-										Settings.Latitude, Settings.Longitude, Settings.Altitude,
-										Coords.RA*180/M_PI, Coords.DEC*180/M_PI,
-										coords.RA_hr, coords.RA_min, coords.RA_sec,
-										coords.DEC_deg, coords.DEC_min, coords.DEC_sec,
-										Image_Azi*180/M_PI, Image_Ele*180/M_PI, Ele_Corr,
-										Detector.mean_sky, num_detected,
-										RQuat[0], RQuat[1], RQuat[2], RQuat[3] );
-
-								
-		//fprintf(file, "MM/DD/YYYY Time,LAT,LONG,ALT,RA,DEC,RA_hr,DEC_deg,AZI,ELE,AtmCorr,MeanSky,NumDetected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
-							}
-							else
-							{
-								fprintf(file, "%02d/%02d/%04d "
-											  "%02d:%02d:%02d.%03d,"
-											  "%.4f, %.4f, %.1f,"
-											  "ERR,ERR,ERR,ERR,"
-											  "ERR,ERR,ERR,"
-											  "%.1f,%d,"
-											  "ERR,ERR,ERR,ERR\n",
-										localtime.wMonth, localtime.wDay, localtime.wYear,
-										localtime.wHour, localtime.wMinute, localtime.wSecond, localtime.wMilliseconds,
-										Settings.Latitude, Settings.Longitude, Settings.Altitude,
-										Detector.mean_sky, num_detected );
-							}
-							fclose(file);
-						}
-					}
-				}
-				else
-				{
-					printf("	Not enough stars to continue.\n");
-				}
-			}
-		} // Settings.ProcessImages
+	} // Settings.ProcessImages
 #ifndef SDL_ENABLED
-		/*
-		printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
-											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
-											*/
-		// RA = hour.6, DEC = deg.4, AZI,ELE = deg.4
-		if ( Image_Correct_ID )
-			printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Boresight: %.4f | Stars: %d | Mean: %.1f\n"
-					"EleCorr: %d | LST: %f | HA: %f | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f\n",
-					Image_Coords.RA*12/M_PI, Image_Coords.DEC*180/M_PI,
-					Image_Azi*180/M_PI, Image_Ele*180/M_PI, Image_Bore*180/M_PI,
-					num_detected, Mean_Sky_Level,
-					Ele_Corr, Image_LST, Image_HA,
-					Settings.Latitude, Settings.Longitude, Settings.Altitude );
-		else
-			printf( "(RA, DEC) = ERR | (AZI, ELE) = ERR | Boresight: ERR | Stars: %d | Mean: %.1f\n"
-					"EleCorr: ERR | LST: ERR | HA: ERR | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f\n",
-					num_detected, Mean_Sky_Level,
-					Settings.Latitude, Settings.Longitude, Settings.Altitude );
+
+#ifdef TIMERS_ON
+	Timer PrintingTimer;
+	PrintingTimer.StartTimer();
 #endif
-	}
+	/*
+	printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
+	Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+	*/
+	// RA = hour.6, DEC = deg.4, AZI,ELE = deg.4
+	if ( Image_Correct_ID )
+		printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Boresight: %.4f | Stars: %d | Mean: %.1f\n"
+		"EleCorr: %d | LST: %f | HA: %f | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f | Focal Length =%.2f\n",
+		Image_Coords.RA*12/M_PI, Image_Coords.DEC*180/M_PI,
+		Image_Azi*180/M_PI, Image_Ele*180/M_PI, Image_Bore*180/M_PI,
+		num_detected, Mean_Sky_Level,
+		Ele_Corr, Image_LST, Image_HA,
+		Settings.Latitude, Settings.Longitude, Settings.Altitude,
+		running_foc);
+	else
+		printf( "(RA, DEC) = ERR | (AZI, ELE) = ERR | Boresight: ERR | Stars: %d | Mean: %.1f\n"
+		"EleCorr: ERR | LST: ERR | HA: ERR | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f | Focal Length =%.2f\n",
+		num_detected, Mean_Sky_Level,
+		Settings.Latitude, Settings.Longitude, Settings.Altitude, running_foc );
+#ifdef TIMERS_ON
+	PrintingTimer.StopTimer();
+	printf("Successfully Printed values| Time elapsed: %d ms \n", PrintingTimer.GetTime());
+#endif
+
+#endif //SDL_ENABLED
+
+	//when reading from file, we filled up BytePtr in FrameCallBackHelper.
+	if ( (Settings.ReadRaw || Settings.ReadFits) && BytePtr != NULL)
+		delete[] BytePtr;
+
+#ifdef TIMERS_ON
+	FrameCallBackHelperTimer.StopTimer();
+	printf("Completed entire frame. | Time elapsed: %d ms\n", FrameCallBackHelperTimer.GetTime() );
+#endif
+
 }
 
-// Called when there is a problem with the camera
+// Called when the camera is working. Passes to FrameCallBackHelper if device matches and not in read mode.
+// When ReadRaw is on, the FrameCallBackHelper is called directly.
+void FrameCallBack(TProcessedDataProperty* Attributes, unsigned char* BytePtr ){
+	if ( Attributes->CameraID == Camera.DeviceID && !Settings.ReadRaw && !Settings.ReadFits) // The working camera, and NOT reading from files.
+		FrameCallBackHelper( BytePtr );
+}
+
+	// Called when there is a problem with the camera
 void CameraFaultCallBack( int ImageType )
 {
 	printf( "Error: Camera fault.\n" );
@@ -514,55 +1150,64 @@ void CameraFaultCallBack( int ImageType )
 int main(int argc, char* argv[])
 {
 	MSG msg; // Required for camera to interface with windows
-
+	
 	int ret;
-
+	
 	ImageStars.reserve( 500 );
-
+	
 	printf( "Loading camera settings from file: %s\n", settings_file );
 	CameraLoadSettings(settings_file);
+
+
+	if(Settings.ReadRaw || Settings.ReadFits){
+		printf("Input directory you wish to read from.\n");
+		scanf("%s",namesFileDir);
+		printf("you entered: %s\n",namesFileDir);
+		putFileNamesIntoVector(namesFileDir);
+		//extractDataFromRawFile("./data_20130518_175503/image_20130518_175504026.raw");
+	}
 	
-	//TEST
+		//TEST
 	/*
-		SYSTEMTIME time;
-		GetSystemTime( &time );
-		double JDN = getJulianDate( &time );
-		double LAT = Settings.Latitude * M_PI / 180;
-		double LONG = Settings.Longitude * M_PI / 180;
-		double RA = 0.009126;
-		double DEC = 0.6938;
-		//printf("Julian: %f\n", relJDN);
-		double LST, HA;
-		LST = getLST( LONG, JDN );
-		HA = getHA1( LST, RA );
-		Image_Azi = getAzi( HA, LAT, DEC );
-		Image_Ele = getEle( HA, LAT, DEC );
-
-		printf("JDN = %f | (LAT,LONG) = (%f,%f) | (RA,DEC) = (%f,%f) | (LST, HA) = (%f,%f) | (AZI,EL) = (%f, %f)\n",
-				JDN, LAT, LONG, RA, DEC, LST, HA, Image_Azi, Image_Ele);
-	*/
-	//TEST
-
-	// Setup Priors
+	 SYSTEMTIME time;
+	 GetSystemTime( &time );
+	 double JDN = getJulianDate( &time );
+	 double LAT = Settings.Latitude * M_PI / 180;
+	 double LONG = Settings.Longitude * M_PI / 180;
+	 double RA = 0.009126;
+	 double DEC = 0.6938;
+	 //printf("Julian: %f\n", relJDN);
+	 double LST, HA;
+	 LST = getLST( LONG, JDN );
+	 HA = getHA1( LST, RA );
+	 Image_Azi = getAzi( HA, LAT, DEC );
+	 Image_Ele = getEle( HA, LAT, DEC );
+	 
+	 printf("JDN = %f | (LAT,LONG) = (%f,%f) | (RA,DEC) = (%f,%f) | (LST, HA) = (%f,%f) | (AZI,EL) = (%f, %f)\n",
+	 JDN, LAT, LONG, RA, DEC, LST, HA, Image_Azi, Image_Ele);
+	 */
+		//TEST
+	
+		// Setup Priors
 	Prior.coords.RA = 0.0f;
 	Prior.coords.DEC = 0.0f;
 	Prior.tickCount = GetTickCount();
-	Prior_Valid = true;
-
+	
 	if ( Settings.BitMode != 12 )
 	{
 		printf( "Error: Program only supports 12 bit images.\n" );
 		return 0;
 	}
-
-	Prior.phi_max = MAX_PRIOR_DIST;
-
-	// Load the dark image
+	
+	//Prior.phi_max = MAX_PRIOR_DIST;
+	Prior.phi_max = Settings.PriorError;
+	
+		// Load the dark image
 	DarkImage.width = Settings.ImageWidth;
 	DarkImage.height = Settings.ImageHeight;
 	DarkImage.bitmode = Settings.BitMode;
 	DarkImage.data = new unsigned short[CAMERA_WIDTH*CAMERA_HEIGHT];
-
+	
 	if (DarkImage.data != NULL)
 	{
 		FILE* file = fopen("dark_image.raw", "rb");
@@ -572,7 +1217,7 @@ int main(int argc, char* argv[])
 			fclose(file);
 			if ( Settings.BinMode > 1 )
 			{
-				// If binning is enabled, simulate binning on the dark image
+					// If binning is enabled, simulate binning on the dark image
 				unsigned short* DarkPtr = (unsigned short*)DarkImage.data;
 				unsigned int sum;
 				int x, y, i, j;
@@ -588,7 +1233,7 @@ int main(int argc, char* argv[])
 					}
 				}
 			}
-
+			
 		}
 		else
 		{
@@ -596,113 +1241,137 @@ int main(int argc, char* argv[])
 			DarkImage.data = NULL;
 		}
 	}
-
-	// Allocate a static framebuffer for the camera image
+	
+		// Allocate a static framebuffer for the camera image
 	pixel_data = new unsigned short[Settings.ImageWidth*Settings.ImageHeight];
 	if ( pixel_data != NULL )
 		memset( pixel_data, 0, Settings.ImageWidth*Settings.ImageHeight*sizeof(unsigned short) );
-
+	
 #ifdef SDL_ENABLED
-	// Initialize SDL
+		// Initialize SDL
 	ret = SDL_Init( SDL_INIT_VIDEO );
 	printf( "SDL_Init returns %d\n", ret );
 	screen = SDL_SetVideoMode( Settings.ImageWidth, Settings.ImageHeight, 32, SDL_HWSURFACE | SDL_DOUBLEBUF );
 	SDL_WM_SetCaption( "CCD Camera", NULL );
 	SDL_Event event;
-
+	
 	ret = TTF_Init();
 	printf( "TTF_Init returned %d\n", ret );
 	font = TTF_OpenFont( "consola.ttf", FONT_SIZE );
-	//printf("Font at 0x%08X\n", (unsigned int)font);
-
+		//printf("Font at 0x%08X\n", (unsigned int)font);
+	
 	int bytes_pp = (Settings.BitMode == 12 ? 2 : 1);
 	CCD_surface = SDL_CreateRGBSurfaceFrom( pixel_data, Settings.ImageWidth, Settings.ImageHeight,
-													bytes_pp*8, Settings.ImageWidth*bytes_pp,
-													0x0ff0, 0x0ff0, 0x0ff0, 0);
-	//printf( "CCD_surface at 0x%08X\n", (unsigned int)CCD_surface );
+																				 bytes_pp*8, Settings.ImageWidth*bytes_pp,
+																				 0x0ff0, 0x0ff0, 0x0ff0, 0);
+		//printf( "CCD_surface at 0x%08X\n", (unsigned int)CCD_surface );
 #endif
 	
-	if ( Settings.ProcessImages )
+	if ( Settings.ProcessImages && !Settings.ReadRaw && !Settings.ReadFits)
 	{
-		// Load Star Catalog
+			// Load Star Catalog from current time, if not reading from file
 		SYSTEMTIME systime;
 		GetSystemTime( &systime );
-
+		
 		glCatalog.Initialize( "catalog.txt", &systime, Settings.FocalLength );
 	}
-
+	
 	Camera.Timer = 0;
 	Camera.Initialized = false;
 	Camera.EngineStarted = false;
 
-	// Initialize camera engine
-	printf( "Initializing device.\n" );
-	ret = BUFCCDUSB_InitDevice();
-	printf( "There are %d devices.\n", ret );
-	if ( ret <= 0 )
-	{
-		printf( "Error: No devices.\n" );
-		goto exit;
-	}
-	Camera.Initialized = true;
+	// Initialize camera engine, if NOT reading from file.
+	if (!Settings.ReadRaw && !Settings.ReadFits){
+		printf( "Initializing device.\n" );
+		ret = BUFCCDUSB_InitDevice();
+		printf( "There are %d devices.\n", ret );
+		if ( ret <= 0 )
+		{
+			// don't give error if ReadRaw
+			if (Settings.ReadRaw)
+				printf( "No devices, but ReadRaw is on.\n" );
+			// if ReadRaw is off, give an error
+			else if (Settings.ReadFits) {
+				printf( "No devices, but ReadFits is on.\n" );
+			} else {
+				printf( "Error: No devices.\n" );
+				goto exit;
+			}
+		}
+		Camera.Initialized = true;
 
-	printf( "Assuming device number 1.\n" );
-	Camera.DeviceID = 1;
-	ret = BUFCCDUSB_GetModuleNoSerialNo( Camera.DeviceID, Camera.ModuleNo, Camera.SerialNo );
-	if ( ret == 1 )
-	{
-		printf( "Module number: %s\n", Camera.ModuleNo );
-		printf( "Serial number: %s\n", Camera.SerialNo );
-	}
-	else
-	{
-		printf( "Error: Couldn't retrieve module or serial number.\n" );
-		goto exit;
-	}
+		if (!Settings.ReadRaw && !Settings.ReadFits)
+			printf( "Assuming device number 1.\n" );
+		Camera.DeviceID = 1;
+		ret = BUFCCDUSB_GetModuleNoSerialNo( Camera.DeviceID, Camera.ModuleNo, Camera.SerialNo );
+		//check camera details. Skip is using ReadRaw
+		if ( ret == 1 && !Settings.ReadRaw && !Settings.ReadFits)
+		{
+			printf( "Module number: %s\n", Camera.ModuleNo );
+			printf( "Serial number: %s\n", Camera.SerialNo );
+		}
+		else if (!Settings.ReadRaw && !Settings.ReadFits) 
+		{
+			printf( "Error: Couldn't retrieve module or serial number.\n" );
+			goto exit;
+		}
 
-	printf( "Starting camera engine.\n" );
-	ret = BUFCCDUSB_AddDeviceToWorkingSet( Camera.DeviceID );
-	ret = BUFCCDUSB_StartCameraEngine( NULL, Settings.BitMode );
-	if ( ret == 2 )
-	{
-		printf("Error: Tried setting to 12 bit mode, but not supported -- setting to 8 bit instead.\n");
-		Settings.BitMode = 8;
-	}
-	else if ( ret == -1 )
-	{
-		printf("Error: Camera engine could not start.\n");
-		goto exit;
-	}
-	Camera.EngineStarted = true;
-	printf( "BUFCCDUSB_StartCameraEngine returns %d\n", ret );
+		if (!Settings.ReadRaw && !Settings.ReadFits)
+			printf( "Starting camera engine.\n" );
+		ret = BUFCCDUSB_AddDeviceToWorkingSet( Camera.DeviceID );
+		ret = BUFCCDUSB_StartCameraEngine( NULL, Settings.BitMode );
+		if ( ret == 2 )
+		{
+			printf("Error: Tried setting to 12 bit mode, but not supported -- setting to 8 bit instead.\n");
+			Settings.BitMode = 8;
+		}
+		else if ( ret == -1 )
+		{
+			// don't throw error if reading raw
+			if (Settings.ReadRaw || Settings.ReadFits)
+				printf("Camera engine did not start.\n");
+			// otherwise throw error and exit.
+			else {
+				printf("Error: Camera engine did not start.\n");
+				goto exit;
+			}
+		}
+		Camera.EngineStarted = true;
+		printf( "BUFCCDUSB_StartCameraEngine returns %d\n", ret );
 
-	printf( "Changing camera settings.\n");
-	ret = BUFCCDUSB_SetCameraWorkMode( Camera.DeviceID, CAMERA_MODE(Settings.TriggerMode) );
-	ret = BUFCCDUSB_SetGains( Camera.DeviceID, Settings.RedGain, Settings.GreenGain, Settings.BlueGain );
-	ret = BUFCCDUSB_SetCustomizedResolution( Camera.DeviceID, CAMERA_WIDTH, Settings.ImageHeight,
-											( Settings.BinMode == 1 ? 0 : 0x81 + (Settings.BinMode-2) ), 4 );
-	// exposure input is in 50 microsecond units
-	ret = BUFCCDUSB_SetExposureTime( Camera.DeviceID, Settings.ExposureTime*1000/50 );
+		printf( "Changing camera settings.\n");
+		ret = BUFCCDUSB_SetCameraWorkMode( Camera.DeviceID, CAMERA_MODE(Settings.TriggerMode) );
+		ret = BUFCCDUSB_SetGains( Camera.DeviceID, Settings.RedGain, Settings.GreenGain, Settings.BlueGain );
+		ret = BUFCCDUSB_SetCustomizedResolution( Camera.DeviceID, CAMERA_WIDTH, Settings.ImageHeight,
+			( Settings.BinMode == 1 ? 0 : 0x81 + (Settings.BinMode-2) ), 4 );
+		// exposure input is in 50 microsecond units
+		ret = BUFCCDUSB_SetExposureTime( Camera.DeviceID, Settings.ExposureTime*1000/50 );
 
-	printf( "Installing hookers, start grabbing.\n" );
-	ret = BUFCCDUSB_InstallFrameHooker( FRAME_TYPE, FrameCallBack );
-	printf( "BUFCCDUSB_InstallFrameHooker returns %d\n", ret );
-	ret = BUFCCDUSB_InstallUSBDeviceHooker( CameraFaultCallBack );
+		printf( "Installing hookers, start grabbing.\n" );
+		ret = BUFCCDUSB_InstallFrameHooker( FRAME_TYPE, FrameCallBack );
+		printf( "BUFCCDUSB_InstallFrameHooker returns %d\n", ret );
+		ret = BUFCCDUSB_InstallUSBDeviceHooker( CameraFaultCallBack );
 
-	if ( Settings.TriggerMode == true )
-		BUFCCDUSB_StartFrameGrab( GRAB_FRAME_FOREVER );
+		if ( Settings.TriggerMode == true )
+			BUFCCDUSB_StartFrameGrab( GRAB_FRAME_FOREVER );
+	} // end !Settings.ReadRaw
 
 	short mouse_x = 0, mouse_y = 0;
 	coordinates MouseCoords;
-
-	// create file structure names, add format to top of data file
+	
+		// create file structure names, add format to top of data file
 	SYSTEMTIME systime;
 	GetLocalTime( &systime );
 	sprintf( dir_name, "data_%04d%02d%02d_%02d%02d%02d", systime.wYear, systime.wMonth, systime.wDay,
-			systime.wHour, systime.wMinute, systime.wSecond );
+					systime.wHour, systime.wMinute, systime.wSecond );
 	mkdir( dir_name );
+	sprintf( fits_dir_name, "fits_data_%04d%02d%02d_%02d%02d%02d", systime.wYear, systime.wMonth, systime.wDay,
+					systime.wHour, systime.wMinute, systime.wSecond );
+	mkdir( fits_dir_name );
 	sprintf( output_name, "./%s/log_%04d%02d%02d_%02d%02d%02d.csv", dir_name, systime.wYear, systime.wMonth, systime.wDay,
-			systime.wHour, systime.wMinute, systime.wSecond );
+					systime.wHour, systime.wMinute, systime.wSecond );
+	sprintf( output_foc, "./%s/foc_%04d%02d%02d_%02d%02d%02d.csv", dir_name, systime.wYear, systime.wMonth, systime.wDay,
+					systime.wHour, systime.wMinute, systime.wSecond );
 	FILE* file = fopen(output_name, "w");
 	if ( file != NULL )
 	{
@@ -710,23 +1379,23 @@ int main(int argc, char* argv[])
 					  "RA (deg),DEC (deg),RA (hr:min:sec),DEC_deg (deg:min:sec),"
 					  "AZI (deg),ELE (deg),EleCorr (arcsec),"
 					  "MeanSky,NumDetected,"
-					  "RQuat0,RQuat1,RQuat2,RQuat3\n");
+					  "RQuat0,RQuat1,RQuat2,RQuat3,Focal Length\n");
 		fclose(file);
 	}
 	
 	printf( "Entering main loop.\n" );
 	while ( !fault )
 	{
-		// Handle SDL drawing
+			// Handle SDL drawing
 #ifdef SDL_ENABLED
 		/*
-		
-			printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Stars: %d | Mean: %.1f\n"
-					"EleCorr: %d | LST: %f | HA: %f | (LAT,LONG) = (%.4f,%.4f) | ALT = %.1f\n",
-					*/
+		 
+		 printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Stars: %d | Mean: %.1f\n"
+		 "EleCorr: %d | LST: %f | HA: %f | (LAT,LONG) = (%.4f,%.4f) | ALT = %.1f\n",
+		 */
 		GUIFlipScreen();
 		GUIPrintText( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
-											Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+								 Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
 		GUIPrintText( "Mean Sky Level: %.1f", Mean_Sky_Level );
 		GUIPrintText( "Stars Detected: %d", num_detected );
 		GUIPrintText( "Latitude:  %.4f", Settings.Latitude );
@@ -740,6 +1409,7 @@ int main(int argc, char* argv[])
 			GUIPrintText( "ELE: %.4f", Image_Ele*180/M_PI );
 			GUIPrintText( "RA: %.6f", Image_Coords.RA*12/M_PI );
 			GUIPrintText( "DEC: %.4f", Image_Coords.DEC*180/M_PI );
+			//GUIPrintText( "Focal Length Used: %.1f", Prior.focal_length );
 		}
 		else
 		{
@@ -749,6 +1419,7 @@ int main(int argc, char* argv[])
 			GUIPrintText( "ELE: ERR" );
 			GUIPrintText( "RA:  ERR" );
 			GUIPrintText( "DEC: ERR" );
+			//GUIPrintText( "Focal Length Used: ERR" );
 		}
 		GUIPrintText( "" );
 		GUIPrintText( "Mouse: (%d,%d)", mouse_x, mouse_y );
@@ -767,75 +1438,79 @@ int main(int argc, char* argv[])
 			GUIPrintText( "MouseDEC: ERR" );
 		}
 		SDL_Flip(screen);
-		// Handle SDL events
+			// Handle SDL events
 		while( SDL_PollEvent( &event ) )
 		{
 			switch (event.type)
 			{
-			case SDL_MOUSEMOTION:
-				// Get Mouse coordinates and find RA,DEC
-				mouse_x = event.motion.x;
-				mouse_y = Settings.ImageHeight-1 - event.motion.y;
-				double rP[3], r[3];
-				GetSphericalFromImage( mouse_x - Settings.ImageWidth/2.0f + 0.5f, mouse_y - Settings.ImageHeight/2.0f + 0.5f, Settings.FocalLength, rP );
-				matrix_mult( Image_Rt, rP, r );
-				GetCoordsFromSpherical( r, &MouseCoords );
-				break;
-			case SDL_QUIT:
-				goto exit;
-			default:
-				break;
+				case SDL_MOUSEMOTION:
+						// Get Mouse coordinates and find RA,DEC
+					mouse_x = event.motion.x;
+					mouse_y = Settings.ImageHeight-1 - event.motion.y;
+					double rP[3], r[3];
+					GetSphericalFromImage( mouse_x - Settings.ImageWidth/2.0f + 0.5f, mouse_y - Settings.ImageHeight/2.0f + 0.5f, Settings.FocalLength, rP );
+					matrix_mult( Image_Rt, rP, r );
+					GetCoordsFromSpherical( r, &MouseCoords );
+					break;
+				case SDL_QUIT:
+					goto exit;
+				default:
+					break;
 			}
 		}
 #endif
+		// If there is no camera, call FrameCallBackHelper directly. The BytePtr is created inside, so pass NULL.
+		if (Settings.ReadRaw || Settings.ReadFits)
+			FrameCallBackHelper(NULL);
+		else{
+			// The following is to let camera engine to be active..it needs message loop.
+			if ( PeekMessage( &msg, NULL, 0, 0, PM_REMOVE ) )
+			{
+				if( msg.message == WM_QUIT )
+				{
+					goto exit;
+				}
+				else if ( msg.message == WM_TIMER )
+				{
+					TranslateMessage(&msg);
+					DispatchMessage(&msg);
+				}
+			}
+			if ( Settings.TriggerMode == false )
+			{
+				// If trigger mode is off, program is on a user-set timer.
+				unsigned long long ticks = GetTickCount();	// milliseconds
+				//printf( "TickCount: %llu\n", ticks );
 
-		// The following is to let camera engine to be active..it needs message loop.
-		if ( PeekMessage( &msg, NULL, 0, 0, PM_REMOVE ) )
-		{
-			if( msg.message == WM_QUIT )
-			{
-				goto exit;
-			}
-			else if ( msg.message == WM_TIMER )
-			{
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
-			}
-		}
-		if ( Settings.TriggerMode == false )
-		{
-			// If trigger mode is off, program is on a user-set timer.
-			unsigned long long ticks = GetTickCount();	// milliseconds
-			//printf( "TickCount: %llu\n", ticks );
+				if ( Camera.Timer < 0 )
+				{
+					Camera.Timer = 0;
+				}
+				else
+				{
+					Camera.Timer += ticks - Camera.PrevTimeStamp;
+				}
+				Camera.PrevTimeStamp = ticks;
 
-			if ( Camera.Timer < 0 )
-			{
-				Camera.Timer = 0;
+				if ( Camera.Timer >= Settings.CaptureDelay )
+				{
+					// reset timer
+					Camera.Timer %= Settings.CaptureDelay;
+					BUFCCDUSB_StartFrameGrab( 1 );
+				}
 			}
-			else
-			{
-				Camera.Timer += ticks - Camera.PrevTimeStamp;
-			}
-			Camera.PrevTimeStamp = ticks;
-
-			if ( Camera.Timer >= Settings.CaptureDelay )
-			{
-				// reset timer
-				Camera.Timer %= Settings.CaptureDelay;
-				BUFCCDUSB_StartFrameGrab( 1 );
-			}
-		}
-	}
-
+		} //if not reading from image
+	} //while (!fault)
+	
 exit:
 	printf( "Cleaning up.\n" );
-
+	
 #ifdef SDL_ENABLED
-    TTF_CloseFont( font );
-    TTF_Quit();
+	TTF_CloseFont( font );
+	TTF_Quit();
 	SDL_Quit();
 #endif
-
+	
 	BUFCCDUSB_InstallFrameHooker( FRAME_TYPE, NULL );
 	BUFCCDUSB_StopFrameGrab();
 	if ( Camera.EngineStarted )
@@ -847,13 +1522,13 @@ exit:
 	if ( CCD_surface != NULL )
 		SDL_FreeSurface( CCD_surface );
 #endif
-
+	
 	if (pixel_data != NULL)
 		delete[] pixel_data;
 	if (DarkImage.data != NULL)
 		delete[] DarkImage.data;
-
+	
 	printf( "Press ENTER to exit.\n" );
 	getchar();
-    return 0;
+	return 0;
 }

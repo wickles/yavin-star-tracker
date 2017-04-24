@@ -1,16 +1,45 @@
+//READ SETTINGS
+ReadRaw =	TRUE
+ReadFits = 	FALSE
+
+//DUMP SETTINGS
+DumpImages =	FALSE   // Dump raw image data
+DumpFits =	FALSE
+DumpRaws =	FALSE	// Dump RA,DEC and Rotation Matrix with timestamp 
+
+ProcessImages =	TRUE	// Process image for stars to find attitude (subtracts dark). Does NOT affect saved images.
+
+//CAMERA SETTINGS
 TriggerMode =	FALSE	// Enable (TRUE) or disable (FALSE) trigger mode
-DumpImages =	FALSE	// Dump raw image data
-DumpData =		TRUE	// Dump RA,DEC and Rotation Matrix with timestamp
-ProcessImages =	TRUE	// Process image for stars to find attitude
 BitMode12 =		TRUE	// 12 bits (true) or 8 bits (false) (8 bits not guaranteed to work)
 FocalLength =	4293.0	// Focal Length of lens in pixel units
-CaptureDelay =	100		// milliseconds -- camera runs at 14-15 fps, generally use more than 100ms
+CaptureDelay =	10000		// milliseconds -- camera runs at 14-15 fps, generally use more than 100ms
 BinMode =		1		// Bin mode, 1 x n vertical binning
-ExposureTime =	100		// milliseconds (1 - 200,000)
+ExposureTime =	150		// milliseconds (1 - 200,000)
 RedGain =		41		//
 GreenGain =		41		// dB (6 - 41)
 BlueGain =		41		//
 DarkCoeff =		0.75	// Coefficient to multiply dark image by when subtracting from CCD image
+
+//LOCAL COORDINATES
 Latitude =		34.4	// Degrees
 Longitude =		-119.7	//
 Altitude =		0.0		// Meters
+
+//CALIBRATION SETTINGS
+CaliMode = 		TRUE  // Try to determine focal length
+CaliTries = 	200		// number of focal_lengths to try
+FocalError = 	0.03	// Max error anticipated for FocalLength, as a fraction of FocalLength.
+
+//PHOTOMETRY SETTINGS
+OutRad = 		3.0		// parameter used for outer radius in aperture photometry. Multiple of max star radius.
+InRad = 		1.3		// parameter used for inner radius in aperture photometry. Multiple of max star radius.
+
+//PRIOR SETTINGS
+LostInSpace = 	FALSE	// Never use priors.
+
+
+
+PriorRA = 		999		// prior knowledge of RA. Put 999 if not using prior.
+PriorDEC = 		999		// prior knowledge of DEC. Put 999 if not using prior.
+PriorError = 	0.40	// max error in prior, in radians. 

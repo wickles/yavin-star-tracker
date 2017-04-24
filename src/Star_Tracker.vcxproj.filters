@@ -17,6 +17,10 @@
   <ItemGroup>
     <None Include="ReadMe.txt" />
     <None Include="settings.txt" />
+    <None Include="..\bin\cfitsio.dll" />
+    <None Include="cfitsio.def">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -87,5 +91,6 @@
     <Library Include="SDL.lib" />
     <Library Include="SDLmain.lib" />
     <Library Include="SDL_ttf.lib" />
+    <Library Include="cfitsio.lib" />
   </ItemGroup>
 </Project>
