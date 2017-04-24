@@ -216,8 +216,11 @@ int CameraLoadSettings( const char* filename )
 		printf( "Error opening settings file.\n" );
 	
 	Settings.TriggerMode =	IniGetBool( file, "TriggerMode", false );
+
 	Settings.DumpRaws =	IniGetBool( file, "DumpRaws", false );
+	Settings.DumpFits =		IniGetBool( file, "DumpFits", false );
 	Settings.DumpData =		IniGetBool( file, "DumpData", false );
+
 	Settings.ProcessImages =IniGetBool( file, "ProcessImages", false );
 	Settings.BitMode =		( IniGetBool( file, "BitMode12", true ) ? 12 : 8 );
 	Settings.FocalLength =	IniGetFloat( file, "FocalLength", 4293.0f );
@@ -240,7 +243,6 @@ int CameraLoadSettings( const char* filename )
 	Settings.Altitude =		IniGetFloat( file, "Altitude", 0.0f );
 	Settings.ReadRaw =	IniGetBool( file, "ReadRaw", false );
 	Settings.ReadFits =	IniGetBool( file, "ReadFits", false );
-	Settings.DumpFits =		IniGetBool( file, "DumpFits", false );
 	Settings.CaliMode =		IniGetBool( file, "CaliMode", false);
 	Settings.CaliTries =	IniGetInt( file, "CaliTries", 10 );
 	Settings.FocalError =	IniGetFloat( file, "FocalError", 0.01);
@@ -527,9 +529,232 @@ void parseFileNameForDate(char* filename){
 //	printf("Image Time IN PARSE METHOD is %04d%02d%02d_%02d%02d%02d%03d\n", Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
 //	Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
 
-
 	return;
 }
+
+////////////////////////////////////////
+//	Methods Used In Calibration Mode  //
+////////////////////////////////////////
+
+void updatePriorFocalLength()
+{
+	Prior.focal_length = Settings.FocalLength;
+}
+
+/*
+if calibration mode is on, try different focal lengths until one works.
+Does not save the focal length that worked, only whether there was a correct ID. 
+Specify bounds and increments in settings.txt file.
+Use focal_length as the starting point, and move outwards.
+*/
+void findValidSolution(	vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, 
+					coordinates* BoresightCoords, coordinates* Coords, sfloat R[3][3], double RQuat[4], double &err)
+{
+	float currentFocal = Settings.FocalLength;
+	float startingFocal = Settings.FocalLength;//Prior_Valid? Prior.focal_length: Settings.FocalLength;
+
+	//max error, in pixels
+	float maxError = Settings.FocalError * Settings.FocalLength;
+	// maybe try:
+	Image_Correct_ID = false;
+	for(  int f = 0; f < Settings.CaliTries && !Image_Correct_ID; f++ ){
+
+		//add or subtract, moving outwards from the best guess.
+		if (f%2 == 0)
+			currentFocal = startingFocal + ( (float) f) * maxError / Settings.CaliTries;
+		else currentFocal = startingFocal - ( (float) f) * maxError / Settings.CaliTries;
+
+		//adjust image stars r_prime vector using GetSphericalFromImage with different focal lengths:
+		for (int i = 0; i < ImageStars.size(); i++)
+			GetSphericalFromImage(	ImageStars[i].centroid_x - IMAGE_WIDTH/2.0f + 0.5f, 
+			ImageStars[i].centroid_y - IMAGE_HEIGHT/2.0f + 0.5f,
+			currentFocal, ImageStars[i].r_prime );
+
+		// enough stars, continue with identification
+		IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
+
+		double rms_error = GetAttitude(ImageStars, CatalogStars, BoresightCoords, Coords, R, RQuat, err);
+		Image_Correct_ID = ( rms_error <= 0.01 );
+	}
+	printf("focal length that gives solutions is %f\n", currentFocal);
+}
+
+/*
+Finds the best focal length by minimizing the sum of errors
+of the identified image stars as a function of focal length
+
+If both caliMode and dumpData are on, then record total error
+versus focal length in foc_... file
+*/
+
+void findBestFocalLength(	vector<image_star>& ImageStars, vector<catalog_star>& CatalogStars, 
+					coordinates* BoresightCoords, coordinates* Coords, sfloat R[3][3], double RQuat[4], double &err)
+{
+	FILE* file;
+	if (Settings.CaliMode && Settings.DumpData)
+		file = fopen(output_foc, "a");
+	else file = NULL;
+
+	double currentFocal = Settings.FocalLength - Settings.FocalError * Settings.FocalLength;
+	double min_err = err; // we'll find the min err. Set to the one retrieved previously, which is >= min_err.
+	double min_focal = currentFocal;
+
+	vector<double> rms_error_trials;
+	rms_error_trials.clear();
+	rms_error_trials.reserve(Settings.CaliTries);
+	for (int f = 0; f < Settings.CaliTries; f++){
+
+		//adjust image stars r_prime vector using GetSphericalFromImage with different focal lengths:
+		for (int i = 0; i < ImageStars.size(); i++)
+			GetSphericalFromImage(	ImageStars[i].centroid_x - IMAGE_WIDTH/2.0f + 0.5f, 
+			ImageStars[i].centroid_y - IMAGE_HEIGHT/2.0f + 0.5f,
+			currentFocal, ImageStars[i].r_prime );
+
+		currentFocal += 2*Settings.FocalError * Settings.FocalLength / Settings.CaliTries;
+		GetAttitude(ImageStars, glCatalog.Stars, BoresightCoords, Coords, R, RQuat, err) ;
+		rms_error_trials.push_back(err);
+
+		if ( file != NULL ){
+			fprintf(file, "%.3f ", currentFocal);
+		}
+
+		if (err < min_err){
+			min_err = err;
+			min_focal = currentFocal;
+		}
+	}
+	if ( file != NULL ){
+		fprintf(file, "\n");
+	}
+
+	//print min focal length and err.
+	//printf("min foc: %f | min err: %f\n",min_focal, min_err);
+
+	currentFocal = Settings.FocalLength - Settings.FocalError * Settings.FocalLength;
+	//print all focals and their error
+	// for (int f = 0; f < Settings.CaliTries; f++){
+	// currentFocal += Settings.FocalError * Settings.FocalLength / Settings.CaliTries;
+	// printf("Foc Len: %f | err: %f\n",currentFocal, rms_error_trials[f]);
+	// }
+
+	if ( file != NULL )
+		for (int i = 0; i < rms_error_trials.size(); i++){
+			fprintf(file, "%.7f ", rms_error_trials[i]);
+		}
+	if ( file != NULL ){
+		fprintf(file, "\n");
+		}
+
+		num_im_cali ++;
+		running_foc = (running_foc*(num_im_cali-1) + min_focal) / num_im_cali;
+		if (num_im_cali%20 == 9)
+			Settings.FocalLength = running_foc;
+
+		//print calibrated focal length and err.
+		printf("running calibrated focal length: %.2f\n",running_foc);
+		if (file != NULL)
+			fclose(file);
+} 
+
+//////////////////////////////////////
+//  End Calibration Mode Methods  ////
+//////////////////////////////////////
+
+//////////////////////////////////////
+//  Dump Images Methods  /////////////
+//////////////////////////////////////
+
+void saveRawImages(unsigned char* BytePtr)
+{
+	// Save image to file w/ timestamp
+	char buffer[512];
+
+	// get system timestamp (millisecond accuracy)
+	int nameSize = sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.raw", dir_name, Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
+		Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+
+	// create a file containing the names of all the files in the directoy
+	char nameFileBuffer[512];
+	int lastIndex = sprintf(nameFileBuffer, "./%s/names.txt",dir_name);
+	FILE* namesFile = fopen(nameFileBuffer,"a");
+	fwrite(buffer, nameSize, 1, namesFile );
+	fwrite("\n", 1, 1, namesFile);
+	fclose(namesFile);
+	// -------------------------------------------------------------------
+
+
+	FILE* file = fopen(buffer, "wb");
+	if ( file == NULL )
+	{
+		printf( "Error: Could not open file.\n" );
+	}
+	else
+	{
+		int pixel_bytes = ( Settings.BitMode == 8 ? 1 : 2 );
+		fwrite( BytePtr, CAMERA_WIDTH*Settings.ImageHeight*pixel_bytes, 1, file );
+		fclose(file);
+		//printf( "Wrote to file successfully.\n" );
+	}
+}
+
+void saveFITSImages(unsigned char* BytePtr)
+{
+		unsigned short* BytePtr16 = (unsigned short*)BytePtr;
+		fitsfile *fptr;       /* pointer to the FITS file, defined in fitsio.h */
+		int status, ii, jj;
+		long  fpixel, nelements, exposure;
+
+		/* initialize FITS image parameters */
+		int bitpix   =  USHORT_IMG; /* 16-bit unsigned short pixel values       */
+		long naxis    =   2;  /* 2-dimensional image                            */    
+		long naxes[2] = { CAMERA_WIDTH , Settings.ImageHeight }; 
+
+		status = 0;         /* initialize status before calling fitsio routines */
+
+		// Save image to file w/ timestamp
+		char buffer[512];
+
+		// get system timestamp (millisecond accuracy)
+		int nameSize = sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.fits", fits_dir_name, Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
+			Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
+
+		if (fits_create_file(&fptr, buffer, &status)) /* create new FITS file */
+			printf("Error: Couldn't create a FITS file");           /* call printerror if error occurs */
+
+			/* write the required keywords for the primary array image.     */
+			/* Since bitpix = USHORT_IMG, this will cause cfitsio to create */
+			/* a FITS image with BITPIX = 16 (signed short integers) with   */
+			/* BSCALE = 1.0 and BZERO = 32768.  This is the convention that */
+			/* FITS uses to store unsigned integers.  Note that the BSCALE  */
+			/* and BZERO keywords will be automatically written by cfitsio  */
+			/* in this case.                                                */
+
+		if ( fits_create_img(fptr,  bitpix, naxis, naxes, &status) )
+			printf( "Error: Couldn't create the image" );
+
+		fpixel = 1;                               /* first pixel to write      */
+		nelements = naxes[0] * naxes[1];          /* number of pixels to write */
+
+		//Writes the image to the file
+		if ( fits_write_img(fptr, TUSHORT, fpixel, nelements, BytePtr16, &status) )
+			printf("Error: Couldn't write the image");
+
+		if ( fits_close_file(fptr, &status) )                /* close the file */
+			printf("Error: Couldn't close the file");
+		
+		// create a file containing the names of all the files in the directoy
+		char nameFileBuffer[512];
+		int lastIndex = sprintf(nameFileBuffer, "./%s/names.txt",fits_dir_name);
+		FILE* namesFile = fopen(nameFileBuffer,"a");
+		fwrite(buffer, nameSize, 1, namesFile );
+		fwrite("\n", 1, 1, namesFile);
+		fclose(namesFile);
+		// -------------------------------------------------------------------
+}
+
+//////////////////////////////////////
+//  Dump Images Methods  /////////////
+//////////////////////////////////////
 
 // Callback function for handling 
 
@@ -543,7 +768,8 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 #endif
 
 	if ( Settings.CaliMode )
-		Prior.focal_length = Settings.FocalLength;
+		void updatePriorFocalLength();
+	else running_foc = Settings.FocalLength;
 	if ( Settings.PriorRA != 999 && Settings.PriorDEC !=999 && Prior_Valid == false && !Settings.LostInSpace){
 		Prior.coords.RA = Settings.PriorRA;
 		Prior.coords.DEC = Settings.PriorDEC;
@@ -693,92 +919,10 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 	}
 
 	if (Settings.DumpRaws)
-	{
-		// Save image to file w/ timestamp
-		char buffer[512];
-
-		// get system timestamp (millisecond accuracy)
-		int nameSize = sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.raw", dir_name, Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
-			Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
-
-		// create a file containing the names of all the files in the directoy
-		char nameFileBuffer[512];
-		int lastIndex = sprintf(nameFileBuffer, "./%s/names.txt",dir_name);
-		FILE* namesFile = fopen(nameFileBuffer,"a");
-		fwrite(buffer, nameSize, 1, namesFile );
-		fwrite("\n", 1, 1, namesFile);
-		fclose(namesFile);
-		// -------------------------------------------------------------------
-
-
-		FILE* file = fopen(buffer, "wb");
-		if ( file == NULL )
-		{
-			printf( "Error: Could not open file.\n" );
-		}
-		else
-		{
-			int pixel_bytes = ( Settings.BitMode == 8 ? 1 : 2 );
-			fwrite( BytePtr, CAMERA_WIDTH*Settings.ImageHeight*pixel_bytes, 1, file );
-			fclose(file);
-			//printf( "Wrote to file successfully.\n" );
-		}
-	}
+		saveRawImages(BytePtr);
 
 	if (Settings.DumpFits)
-	{
-		unsigned short* BytePtr16 = (unsigned short*)BytePtr;
-		fitsfile *fptr;       /* pointer to the FITS file, defined in fitsio.h */
-		int status, ii, jj;
-		long  fpixel, nelements, exposure;
-
-		/* initialize FITS image parameters */
-		int bitpix   =  USHORT_IMG; /* 16-bit unsigned short pixel values       */
-		long naxis    =   2;  /* 2-dimensional image                            */    
-		long naxes[2] = { CAMERA_WIDTH , Settings.ImageHeight }; 
-
-		status = 0;         /* initialize status before calling fitsio routines */
-
-		// Save image to file w/ timestamp
-		char buffer[512];
-
-		// get system timestamp (millisecond accuracy)
-		int nameSize = sprintf( buffer, "./%s/image_%04d%02d%02d_%02d%02d%02d%03d.fits", fits_dir_name, Image_LocalTime.wYear, Image_LocalTime.wMonth, Image_LocalTime.wDay,
-			Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
-
-		if (fits_create_file(&fptr, buffer, &status)) /* create new FITS file */
-			printf("Error: Couldn't create a FITS file");           /* call printerror if error occurs */
-
-			/* write the required keywords for the primary array image.     */
-			/* Since bitpix = USHORT_IMG, this will cause cfitsio to create */
-			/* a FITS image with BITPIX = 16 (signed short integers) with   */
-			/* BSCALE = 1.0 and BZERO = 32768.  This is the convention that */
-			/* FITS uses to store unsigned integers.  Note that the BSCALE  */
-			/* and BZERO keywords will be automatically written by cfitsio  */
-			/* in this case.                                                */
-
-		if ( fits_create_img(fptr,  bitpix, naxis, naxes, &status) )
-			printf( "Error: Couldn't create the image" );
-
-		fpixel = 1;                               /* first pixel to write      */
-		nelements = naxes[0] * naxes[1];          /* number of pixels to write */
-
-		//Writes the image to the file
-		if ( fits_write_img(fptr, TUSHORT, fpixel, nelements, BytePtr16, &status) )
-			printf("Error: Couldn't write the image");
-
-		if ( fits_close_file(fptr, &status) )                /* close the file */
-			printf("Error: Couldn't close the file");
-		
-		// create a file containing the names of all the files in the directoy
-		char nameFileBuffer[512];
-		int lastIndex = sprintf(nameFileBuffer, "./%s/names.txt",fits_dir_name);
-		FILE* namesFile = fopen(nameFileBuffer,"a");
-		fwrite(buffer, nameSize, 1, namesFile );
-		fwrite("\n", 1, 1, namesFile);
-		fclose(namesFile);
-		// -------------------------------------------------------------------
-	}
+		saveFITSImages(BytePtr);
 
 #ifdef TIMERS_ON
 	Timer SumTimer;
@@ -879,42 +1023,13 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 				sfloat RQuat[4];
 				double err = 0;
 
-				// if calibration mode is on, try different focal lengths.
-				/*
-				Specify bounds and increments in settings.txt file.
-				Use focal_length as the starting point, and move outwards.
-				*/
-
 				if (Settings.CaliMode){
-					float currentFocal = Settings.FocalLength;
-					float startingFocal = Settings.FocalLength;//Prior_Valid? Prior.focal_length: Settings.FocalLength;
-
-					//max error, in pixels
-					float maxError = Settings.FocalError * Settings.FocalLength;
-					// maybe try:
-					Image_Correct_ID = false;
-					for(  int f = 0; f < Settings.CaliTries && !Image_Correct_ID; f++ ){
-
-						//add or subtract, moving outwards from the best guess.
-						if (f%2 == 0)
-							currentFocal = startingFocal + ( (float) f) * maxError / Settings.CaliTries;
-						else currentFocal = startingFocal - ( (float) f) * maxError / Settings.CaliTries;
-
-						//adjust image stars r_prime vector using GetSphericalFromImage with different focal lengths:
-						for (int i = 0; i < ImageStars.size(); i++)
-							GetSphericalFromImage(	ImageStars[i].centroid_x - IMAGE_WIDTH/2.0f + 0.5f, 
-							ImageStars[i].centroid_y - IMAGE_HEIGHT/2.0f + 0.5f,
-							currentFocal, ImageStars[i].r_prime );
-
-						// enough stars, continue with identification
-						IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
-
-						double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err);
-						Image_Correct_ID = ( rms_error <= 0.01 );
-					}
+					printf("finding valid solution in calibration mode\n" );
+					findValidSolution(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err);
 				}
 				// else calibration mode is NOT on
 				else{ 
+					printf("finding valid solution -- no calibration mode\n" );
 					// enough stars, continue with identification
 					IdentifyImageStars(ImageStars, glCatalog, ( Prior_Valid ? &Prior : NULL ));
 					double rms_error = GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err);
@@ -924,70 +1039,9 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 				if ( Image_Correct_ID )
 				{
 					
-					if (Settings.CaliMode){
-						FILE* file;
-						if (Settings.DumpData)
-							file = fopen(output_foc, "a");
-						else file = NULL;
+					if (Settings.CaliMode)
+						findBestFocalLength(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err);
 
-						double currentFocal = Settings.FocalLength - Settings.FocalError * Settings.FocalLength;
-						double min_err = err; // we'll find the min err. Set to the one retrieved previously, which is >= min_err.
-						double min_focal = currentFocal;
-
-						vector<double> rms_error_trials;
-						rms_error_trials.clear();
-						rms_error_trials.reserve(Settings.CaliTries);
-						for (int f = 0; f < Settings.CaliTries; f++){
-						
-							//adjust image stars r_prime vector using GetSphericalFromImage with different focal lengths:
-							for (int i = 0; i < ImageStars.size(); i++)
-								GetSphericalFromImage(	ImageStars[i].centroid_x - IMAGE_WIDTH/2.0f + 0.5f, 
-								ImageStars[i].centroid_y - IMAGE_HEIGHT/2.0f + 0.5f,
-								currentFocal, ImageStars[i].r_prime );
-
-							currentFocal += 2*Settings.FocalError * Settings.FocalLength / Settings.CaliTries;
-							GetAttitude(ImageStars, glCatalog.Stars, &BoresightCoords, &Coords, R, RQuat, err) ;
-							rms_error_trials.push_back(err);
-
-						if ( file != NULL ){
-							fprintf(file, "%.3f ", currentFocal);
-						}
-
-							if (err < min_err){
-								min_err = err;
-								min_focal = currentFocal;
-							}
-						}
-						if ( file != NULL ){
-							fprintf(file, "\n");
-						}
-
-						//print min focal length and err.
-						//printf("min foc: %f | min err: %f\n",min_focal, min_err);
-						
-						currentFocal = Settings.FocalLength - Settings.FocalError * Settings.FocalLength;
-						//print all focals and their error
-						/*for (int f = 0; f < Settings.CaliTries; f++){
-							currentFocal += Settings.FocalError * Settings.FocalLength / Settings.CaliTries;
-							printf("Foc Len: %f | err: %f\n",currentFocal, rms_error_trials[f]);
-						}*/
-						if ( file != NULL )
-							for (int i = 0; i < rms_error_trials.size(); i++){
-								fprintf(file, "%.7f ", rms_error_trials[i]);
-							}
-						if ( file != NULL ){
-							fprintf(file, "\n");
-						}
-
-						num_im_cali ++;
-						running_foc = (running_foc*(num_im_cali-1) + min_focal) / num_im_cali;
-						if (num_im_cali%20 == 9)
-							Settings.FocalLength = running_foc;
-
-						//print calibrated focal length and err.
-						printf("running calibrated focal length: %.2f\n",running_foc);
-						fclose(file);
-					}
 					Prior.coords = Coords;
 					Prior.tickCount = GetTickCount();
 					if (!Settings.LostInSpace)
@@ -1046,7 +1100,7 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 								"%02d:%02d:%02d.%03d,"
 								"%.4f, %.4f, %.1f,"
 								"%.6f, %.6f,"
-								"%02d:%02d:%f,"
+								"%02d:%02d:%ffits,"
 								"%02d:%02d:%f,"
 								"%.4f,%.4f,%d,"
 								"%.1f,%d,"
@@ -1062,9 +1116,6 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 								Detector.mean_sky, num_detected,
 								RQuat[0], RQuat[1], RQuat[2], RQuat[3],running_foc);
 							//			Prior.focal_length);
-
-
-							//fprintf(file, "MM/DD/YYYY Time,LAT,LONG,ALT,RA,DEC,RA_hr,DEC_deg,AZI,ELE,AtmCorr,MeanSky,NumDetected,Rt00,Rt01,Rt02,Rt10,Rt11,Rt12,Rt20,Rt21,Rt22\n");
 						}
 						else
 						{
@@ -1096,11 +1147,7 @@ void FrameCallBackHelper(unsigned char* BytePtr )
 	Timer PrintingTimer;
 	PrintingTimer.StartTimer();
 #endif
-	/*
-	printf( "%02d/%02d/%04d %02d:%02d:%02d.%03d", Image_LocalTime.wMonth, Image_LocalTime.wDay, Image_LocalTime.wYear,
-	Image_LocalTime.wHour, Image_LocalTime.wMinute, Image_LocalTime.wSecond, Image_LocalTime.wMilliseconds );
-	*/
-	// RA = hour.6, DEC = deg.4, AZI,ELE = deg.4
+
 	if ( Image_Correct_ID )
 		printf( "(RA, DEC) = (%.6f, %.4f) | (AZI, ELE) = (%.4f, %.4f) | Boresight: %.4f | Stars: %d | Mean: %.1f\n"
 		"EleCorr: %d | LST: %f | HA: %f | (LAT, LONG) = (%.4f,%.4f) | ALT = %.1f | Focal Length =%.2f\n",
@@ -1166,27 +1213,6 @@ int main(int argc, char* argv[])
 		putFileNamesIntoVector(namesFileDir);
 		//extractDataFromRawFile("./data_20130518_175503/image_20130518_175504026.raw");
 	}
-	
-		//TEST
-	/*
-	 SYSTEMTIME time;
-	 GetSystemTime( &time );
-	 double JDN = getJulianDate( &time );
-	 double LAT = Settings.Latitude * M_PI / 180;
-	 double LONG = Settings.Longitude * M_PI / 180;
-	 double RA = 0.009126;
-	 double DEC = 0.6938;
-	 //printf("Julian: %f\n", relJDN);
-	 double LST, HA;
-	 LST = getLST( LONG, JDN );
-	 HA = getHA1( LST, RA );
-	 Image_Azi = getAzi( HA, LAT, DEC );
-	 Image_Ele = getEle( HA, LAT, DEC );
-	 
-	 printf("JDN = %f | (LAT,LONG) = (%f,%f) | (RA,DEC) = (%f,%f) | (LST, HA) = (%f,%f) | (AZI,EL) = (%f, %f)\n",
-	 JDN, LAT, LONG, RA, DEC, LST, HA, Image_Azi, Image_Ele);
-	 */
-		//TEST
 	
 		// Setup Priors
 	Prior.coords.RA = 0.0f;
@@ -1362,25 +1388,37 @@ int main(int argc, char* argv[])
 		// create file structure names, add format to top of data file
 	SYSTEMTIME systime;
 	GetLocalTime( &systime );
+
+	if (Settings.DumpRaws || Settings.DumpData){
 	sprintf( dir_name, "data_%04d%02d%02d_%02d%02d%02d", systime.wYear, systime.wMonth, systime.wDay,
 					systime.wHour, systime.wMinute, systime.wSecond );
 	mkdir( dir_name );
+	}
+
+	if (Settings.DumpFits){
 	sprintf( fits_dir_name, "fits_data_%04d%02d%02d_%02d%02d%02d", systime.wYear, systime.wMonth, systime.wDay,
 					systime.wHour, systime.wMinute, systime.wSecond );
 	mkdir( fits_dir_name );
-	sprintf( output_name, "./%s/log_%04d%02d%02d_%02d%02d%02d.csv", dir_name, systime.wYear, systime.wMonth, systime.wDay,
-					systime.wHour, systime.wMinute, systime.wSecond );
+	}
+
+	if (Settings.DumpData) {
+		sprintf( output_name, "./%s/log_%04d%02d%02d_%02d%02d%02d.csv", dir_name, systime.wYear, systime.wMonth, systime.wDay,
+			systime.wHour, systime.wMinute, systime.wSecond );
+	}
+
 	sprintf( output_foc, "./%s/foc_%04d%02d%02d_%02d%02d%02d.csv", dir_name, systime.wYear, systime.wMonth, systime.wDay,
 					systime.wHour, systime.wMinute, systime.wSecond );
-	FILE* file = fopen(output_name, "w");
-	if ( file != NULL )
-	{
-		fprintf(file, "MM/DD/YYYY Time,LAT (deg),LONG (deg),ALT (m),"
-					  "RA (deg),DEC (deg),RA (hr:min:sec),DEC_deg (deg:min:sec),"
-					  "AZI (deg),ELE (deg),EleCorr (arcsec),"
-					  "MeanSky,NumDetected,"
-					  "RQuat0,RQuat1,RQuat2,RQuat3,Focal Length\n");
-		fclose(file);
+	
+	if (Settings.DumpData) { 
+		FILE* file = fopen(output_name, "w");
+		if ( file != NULL ) {
+			fprintf(file, "MM/DD/YYYY Time,LAT (deg),LONG (deg),ALT (m),"
+						  "RA (deg),DEC (deg),RA (hr:min:sec),DEC_deg (deg:min:sec),"
+						  "AZI (deg),ELE (deg),EleCorr (arcsec),"
+						  "MeanSky,NumDetected,"
+						  "RQuat0,RQuat1,RQuat2,RQuat3,Focal Length\n");
+			fclose(file);
+		}
 	}
 	
 	printf( "Entering main loop.\n" );
@@ -1531,4 +1569,4 @@ exit:
 	printf( "Press ENTER to exit.\n" );
 	getchar();
 	return 0;
-}
+}	

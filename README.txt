@@ -89,6 +89,33 @@ Click OK.
 
 ////////////////////////////////////////////////////////////////////////
 
+Calibration Mode:
+
+A recent addition is the option to ask the computer to actively seek a focal length. This is done in a two step process:
+
+(1) find a focal length for which a solution is obtained
+
+(2) find the best focal length once a series of image stars have been identified.
+This is done by minimizing the sum of the errors of the image stars' locations.
+
+Both stages begin their search at the focal length specified in the settings.txt file.
+
+The maximum interval considered is determined by the quantity FocalError, which is
+found in the settings.txt file. This quantity is the PERCENTAGE of the quantity FocalLength.
+
+The interval size of searching is determined by CaliTries, which is also specified in 
+the setttings.txt file.
+
+If DumpData is TRUE, the program will also generate a file foc_YYYYMMDD_HHMMSS
+in the data_YYYYMMDD_HHMMSS directory. This file is used to show the relationship
+between the (sum of the) errors and the focal length. Each analyzed solution has
+two lines: the focal lengths and the errors, in that order.
+
+If DumpData is TRUE, a running average of the focal length will also be recorded in 
+the log_YYYYMMDD_HHMMSS file.
+
+
+////////////////////////////////////////////////////////////////////////
 
 
 Running the program on the sky:

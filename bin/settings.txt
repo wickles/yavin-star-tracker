@@ -3,9 +3,9 @@ ReadRaw =	TRUE
 ReadFits = 	FALSE
 
 //DUMP SETTINGS
-DumpImages =	FALSE   // Dump raw image data
-DumpFits =	FALSE
-DumpRaws =	FALSE	// Dump RA,DEC and Rotation Matrix with timestamp 
+DumpRaws =	FALSE   // Dump RAW image data into:	data_yyyymmdd_hhmmss
+DumpData =	FALSE   // Dump RA,DEC, etc into:	data_yyyymmdd_hhmmss
+DumpFits =	FALSE   //Dump FIT files into:		fits_data_yyyymmdd_hhmmss
 
 ProcessImages =	TRUE	// Process image for stars to find attitude (subtracts dark). Does NOT affect saved images.
 
@@ -24,10 +24,10 @@ DarkCoeff =		0.75	// Coefficient to multiply dark image by when subtracting from
 //LOCAL COORDINATES
 Latitude =		34.4	// Degrees
 Longitude =		-119.7	//
-Altitude =		0.0		// Meters
+Altitude =		0.0			// Meters
 
 //CALIBRATION SETTINGS
-CaliMode = 		TRUE  // Try to determine focal length
+CaliMode = FALSE// Try to determine focal length
 CaliTries = 	200		// number of focal_lengths to try
 FocalError = 	0.03	// Max error anticipated for FocalLength, as a fraction of FocalLength.
 
