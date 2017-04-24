@@ -15,12 +15,11 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <None Include="ReadMe.txt" />
-    <None Include="settings.txt" />
-    <None Include="..\bin\cfitsio.dll" />
     <None Include="cfitsio.def">
       <Filter>Source Files</Filter>
     </None>
+    <None Include="..\README.win32" />
+    <None Include="..\.gitignore" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="stdafx.h">
@@ -92,5 +91,12 @@
     <Library Include="SDLmain.lib" />
     <Library Include="SDL_ttf.lib" />
     <Library Include="cfitsio.lib" />
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="..\README.txt" />
+    <Text Include="..\README-appwiz.txt" />
+    <Text Include="..\bin\catalog.txt" />
+    <Text Include="..\bin\settings.txt" />
+    <Text Include="..\LICENSE.txt" />
   </ItemGroup>
 </Project>

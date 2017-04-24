@@ -11,6 +11,14 @@ method determines the celestial coordinates of the image center.
 Before running the code, you might want to look at the settings file, which controls various options. 
 This includes how to use the program to read/write the images used.
 
+Binaries depend on MSVC runtime components. Redistributables available from Microsoft:
+MSVC-2010-x86: https://www.microsoft.com/en-us/download/details.aspx?id=5555
+MSVC-2012: https://www.microsoft.com/en-us/download/details.aspx?id=30679
+
+Mightex SDK and documentation available from:
+http://www.mightexsystems.com/family_info.php?categories_id=141
+
+
 //////////////////////////////////////////////////////////////////////////
 //						settings.txt file:								//
 //////////////////////////////////////////////////////////////////////////

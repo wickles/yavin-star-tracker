@@ -12,7 +12,7 @@
 
 // TODO: reference additional headers your program requires here
 
-// Comment out to disable SDL
+// Moved to project configuration
 //#define SDL_ENABLED
 
 #include <windows.h>
@@ -22,6 +22,17 @@
 #include "SDL/SDL_ttf.h"
 #endif
 
-using namespace std;
+// fix for VS-2015+
+// also need to define _SILENCE_STDEXT_HASH_DEPRECATION_WARNINGS
+// to allow use of deprecated container hash_map
+#if (_MSC_VER >= 1900) && defined(SDL_ENABLED)
+FILE _iob[] = { *stdin, *stdout, *stderr };
+extern "C" FILE * __cdecl __iob_func(void)
+{
+	return _iob;
+}
+#endif
+
+//using namespace std;
 
 #endif // !defined(AFX_STDAFX_H__B6EAA554_08E3_488D_A3D5_DA3AE5370FA8__INCLUDED_)
